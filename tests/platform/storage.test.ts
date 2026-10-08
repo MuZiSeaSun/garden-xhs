@@ -39,6 +39,12 @@ describe('storage', () => {
     localStorage.setItem('garden_world_v1', JSON.stringify({ v: 1, blocks: [99], camera: { theta: 0, phi: 1, radius: 20 } }));
     expect(await loadWorld()).toBeNull();
   });
+  it('rejects a payload with a missing or malformed camera', async () => {
+    localStorage.setItem('garden_world_v1', JSON.stringify({ v: 1, blocks: [1, 2, 3] }));
+    expect(await loadWorld()).toBeNull();
+    localStorage.setItem('garden_world_v1', JSON.stringify({ v: 1, blocks: [1, 2, 3], camera: 'nope' }));
+    expect(await loadWorld()).toBeNull();
+  });
   it('returns null when nothing is stored', async () => {
     expect(await loadWorld()).toBeNull();
   });

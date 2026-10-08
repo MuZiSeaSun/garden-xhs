@@ -83,12 +83,18 @@ export function bindGestures(canvas: HTMLCanvasElement, handlers: GestureHandler
     dragging = false;
   };
 
+  const onWheel = (e: WheelEvent): void => {
+    e.preventDefault();
+    handlers.onZoom(1 + e.deltaY * 0.001);
+  };
+
   canvas.addEventListener('touchstart', onTouchStart, { passive: false });
   canvas.addEventListener('touchmove', onTouchMove, { passive: false });
   canvas.addEventListener('touchend', onTouchEnd);
   canvas.addEventListener('mousedown', onMouseDown);
   canvas.addEventListener('mousemove', onMouseMove);
   canvas.addEventListener('mouseup', onMouseUp);
+  canvas.addEventListener('wheel', onWheel, { passive: false });
 
   return () => {
     canvas.removeEventListener('touchstart', onTouchStart);
@@ -97,5 +103,6 @@ export function bindGestures(canvas: HTMLCanvasElement, handlers: GestureHandler
     canvas.removeEventListener('mousedown', onMouseDown);
     canvas.removeEventListener('mousemove', onMouseMove);
     canvas.removeEventListener('mouseup', onMouseUp);
+    canvas.removeEventListener('wheel', onWheel);
   };
 }

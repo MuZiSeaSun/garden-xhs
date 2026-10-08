@@ -2,6 +2,7 @@ import { detectCapabilities } from './platform/capabilities';
 import { createRenderer } from './rendering/renderer-factory';
 import { generateAtlas } from './assets/atlas-generator';
 import { createWorld, WORLD_SIZE } from './core/world';
+import { seedGround } from './core/terrain';
 import {
   createCameraOrbit,
   toRendererCameraState,
@@ -44,18 +45,22 @@ async function bootstrap(): Promise<void> {
     return;
   }
 
-  // 恢复存档
+  // 先铺一层草地并首次渲染，避免首屏空白，也不被存档 I/O 阻塞。
+  seedGround(world);
+  renderer.resize(canvas.clientWidth, canvas.clientHeight, window.devicePixelRatio || 1);
+  renderer.syncWorld(world.snapshot());
+  renderer.setCamera(toRendererCameraState(camera));
+
+  // 恢复存档（存在时覆盖地面与相机，再重渲染一次）
   const saved = await loadWorld();
   if (saved && saved.blocks.length === WORLD_SIZE ** 3) {
     for (let i = 0; i < saved.blocks.length; i++) world.blocks[i] = saved.blocks[i];
     camera.theta = saved.camera.theta;
     camera.phi = saved.camera.phi;
     camera.radius = saved.camera.radius;
+    renderer.syncWorld(world.snapshot());
+    renderer.setCamera(toRendererCameraState(camera));
   }
-
-  renderer.resize(canvas.clientWidth, canvas.clientHeight, window.devicePixelRatio || 1);
-  renderer.syncWorld(world.snapshot());
-  renderer.setCamera(toRendererCameraState(camera));
 
   // 状态
   let mode: EditorMode = 'orbit';
@@ -178,6 +183,7 @@ async function bootstrap(): Promise<void> {
     onUndo: undo,
     onReset: () => {
       world.clear();
+      seedGround(world);
       history.clear();
       renderer.syncWorld(world.snapshot());
       scheduleSave();

@@ -34,10 +34,15 @@ const clientAtLeast = (buildVersion: number, minVer: number): boolean =>
 function isSavePayload(x: unknown): x is SavePayload {
   if (!x || typeof x !== 'object') return false;
   const o = x as Record<string, unknown>;
+  const cam = o.camera as Record<string, unknown> | undefined | null;
   return (
     o.v === 1 &&
     Array.isArray(o.blocks) &&
-    o.blocks.every((n) => typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= 9)
+    o.blocks.every((n) => typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= 9) &&
+    !!cam &&
+    typeof cam.theta === 'number' &&
+    typeof cam.phi === 'number' &&
+    typeof cam.radius === 'number'
   );
 }
 

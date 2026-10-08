@@ -5,11 +5,10 @@ import { execSync } from 'node:child_process';
 const BUNDLE = 'dist/app.js';
 
 // Constructs that indicate the app actually *uses* a container-forbidden
-// capability. Bare feature-detection identifiers are intentionally allowed:
-// `detectCapabilities` probes `typeof WebAssembly`/`typeof OffscreenCanvas`,
-// and Three.js core contains `typeof OffscreenCanvas !== "undefined"` guards
-// (`new OffscreenCanvas(...)` is inside that guard and never runs where the
-// feature is absent) — neither is usage.
+// capability. Bare `WebAssembly` is banned (we no longer probe it). Bare
+// `OffscreenCanvas` is intentionally NOT banned: Three.js core carries a
+// `typeof OffscreenCanvas !== "undefined"` guard whose `new OffscreenCanvas`
+// branch never runs where the feature is absent — it is detection, not usage.
 const FORBIDDEN: Array<[string, RegExp]> = [
   ['eval(', /\beval\s*\(/],
   ['new Function(', /new\s+Function\s*\(/],
@@ -19,7 +18,7 @@ const FORBIDDEN: Array<[string, RegExp]> = [
   ['WebSocket', /\bWebSocket\b/],
   ['EventSource', /\bEventSource\b/],
   ['new Worker(', /new\s+Worker\s*\(/],
-  ['WebAssembly.instantiate', /WebAssembly\s*\.\s*(instantiate|instantiateStreaming|compile|Module|Instance)/],
+  ['WebAssembly', /\bWebAssembly\b/],
 ];
 
 describe('bundle scan', () => {

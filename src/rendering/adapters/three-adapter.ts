@@ -42,6 +42,30 @@ const FRAG = /* glsl */ `
   }
 `;
 
+export interface AtlasTextureLike {
+  magFilter: number;
+  minFilter: number;
+  generateMipmaps: boolean;
+  wrapS: number;
+  wrapT: number;
+  flipY: boolean;
+}
+
+/**
+ * Configure the atlas texture. `flipY` MUST be false: atlasUV maps tile row 0
+ * to v in [0, 1/16], and the atlas paints only row 0 at the top of the canvas.
+ * Three's default flipY=true would sample the empty bottom and discard every
+ * face. The hand-written WebGL adapter does not flip, so this keeps them equal.
+ */
+export function configureAtlasTexture(tex: AtlasTextureLike): void {
+  tex.magFilter = THREE.NearestFilter;
+  tex.minFilter = THREE.NearestFilter;
+  tex.generateMipmaps = false;
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.flipY = false;
+}
+
 export class ThreeAdapter implements RendererAdapter {
   readonly name = 'three';
   readonly apiVersion = RENDERER_API_VERSION;
@@ -83,11 +107,7 @@ export class ThreeAdapter implements RendererAdapter {
     this.camera.up.set(0, 1, 0);
 
     this.texture = new THREE.CanvasTexture(atlasCanvas);
-    this.texture.magFilter = THREE.NearestFilter;
-    this.texture.minFilter = THREE.NearestFilter;
-    this.texture.generateMipmaps = false;
-    this.texture.wrapS = THREE.ClampToEdgeWrapping;
-    this.texture.wrapT = THREE.ClampToEdgeWrapping;
+    configureAtlasTexture(this.texture);
 
     this.material = new THREE.ShaderMaterial({
       uniforms: {

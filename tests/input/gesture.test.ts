@@ -26,6 +26,16 @@ describe('bindGestures (mouse path)', () => {
     expect(onOrbit).toHaveBeenCalled();
     expect(onTap).not.toHaveBeenCalled();
   });
+  it('zooms on wheel (deltaY down zooms out, up zooms in)', () => {
+    const c = document.createElement('canvas');
+    const onZoom = vi.fn();
+    bindGestures(c, { onOrbit: vi.fn(), onZoom, onTap: vi.fn() });
+    c.dispatchEvent(new WheelEvent('wheel', { deltaY: 100, bubbles: true }));
+    expect(onZoom).toHaveBeenCalledTimes(1);
+    expect(onZoom.mock.calls[0][0]).toBeGreaterThan(1);
+    c.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, bubbles: true }));
+    expect(onZoom.mock.calls[1][0]).toBeLessThan(1);
+  });
   it('returns a disposer that unbinds handlers', () => {
     const c = document.createElement('canvas');
     const onTap = vi.fn();
