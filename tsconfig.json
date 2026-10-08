@@ -15,7 +15,7 @@
     "skipLibCheck": true,
     "isolatedModules": true,
     "noEmit": true,
-    "types": ["@types/three"]
+    "types": ["@types/three", "node"]
   },
   "include": ["src/**/*.ts", "src/**/*.d.ts", "tests/**/*.ts"]
 }
