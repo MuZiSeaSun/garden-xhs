@@ -1,6 +1,5 @@
 node_modules/
 dist/
-*.log
-.skill/
+build/
 TEMP/
-garden-minitool.zip
+*.log
