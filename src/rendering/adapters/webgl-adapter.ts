@@ -494,6 +494,12 @@ export class WebGLAdapter implements RendererAdapter {
     if (this.propBatches.length > 0 && this.cameraState) {
       gl.useProgram(this.propProgram);
       gl.uniformMatrix4fv(this.pMatrix, false, this.matrix);
+      // 体素 attrib 是全局开关。uv / aLight 道具程序不用；顶点数更大的道具批次会因此 drawElements 失败。
+      // 下一帧体素 bindAttributes 会重新打开它们。
+      const propLocs = new Set([this.pAPos, this.pANrm, this.pACol]);
+      for (const loc of [this.aPosition, this.aNormal, this.aUV, this.aLight]) {
+        if (loc >= 0 && !propLocs.has(loc)) gl.disableVertexAttribArray(loc);
+      }
       for (const b of this.propBatches) {
         gl.bindBuffer(gl.ARRAY_BUFFER, b.posBuf);
         gl.enableVertexAttribArray(this.pAPos);

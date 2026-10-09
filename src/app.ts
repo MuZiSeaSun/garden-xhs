@@ -174,7 +174,11 @@ async function bootstrap(): Promise<void> {
       } else if (hit) {
         // 命中 prop 或 block 一视同仁：目标格 = 命中格 + 法线
         const tx = hit.x + hit.nx, ty = hit.y + hit.ny, tz = hit.z + hit.nz;
-        if (world.getBlock(tx, ty, tz) === BLOCK.AIR && world.setBlock(tx, ty, tz, currentBlockType)) {
+        if (
+          world.getBlock(tx, ty, tz) === BLOCK.AIR &&
+          !propWorld.propAt(tx, ty, tz) &&
+          world.setBlock(tx, ty, tz, currentBlockType)
+        ) {
           history.push({ type: 'set', x: tx, y: ty, z: tz, prev: BLOCK.AIR });
           applyDelta({ added: [{ x: tx, y: ty, z: tz, type: currentBlockType }], removed: [] });
         }
