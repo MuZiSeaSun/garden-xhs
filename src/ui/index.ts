@@ -1,4 +1,5 @@
 import { BLOCK } from '../core/block-types';
+import type { PropModelData } from '../core/prop-types';
 
 export type EditorMode = 'orbit' | 'place' | 'remove';
 
@@ -6,6 +7,7 @@ export interface UIHandlers {
   onModeChange(mode: EditorMode): void;
   onBlockSelect(type: number): void;
   onPresetSelect(key: string): void;
+  onPropSelect(modelId: number): void;
   onUndo(): void;
   onReset(): void;
   onSaveAlbum(): void;
@@ -35,7 +37,7 @@ const PALETTE_ITEMS: readonly PaletteItem[] = [
   { icon: '💐', name: '花丛', preset: 'flowerBed' },
 ];
 
-export function bindUI(handlers: UIHandlers): void {
+export function bindUI(handlers: UIHandlers, propModels: readonly PropModelData[]): void {
   const root = document.getElementById('ui-root');
   if (!root) return;
 
@@ -59,19 +61,51 @@ export function bindUI(handlers: UIHandlers): void {
     modeGroup.appendChild(btn);
   });
 
-  PALETTE_ITEMS.forEach(item => {
+  const clearActive = (): void => {
+    palette.querySelectorAll('.palette-item').forEach((b) => b.classList.remove('active'));
+  };
+
+  const blocksGroup = document.createElement('div');
+  blocksGroup.className = 'palette-group';
+  PALETTE_ITEMS.forEach((item) => {
     const btn = document.createElement('button');
     btn.className = 'palette-item';
     btn.textContent = item.icon;
     btn.title = item.name;
     btn.addEventListener('click', () => {
-      palette.querySelectorAll('.palette-item').forEach(b => b.classList.remove('active'));
+      clearActive();
       btn.classList.add('active');
       if (item.type !== undefined) handlers.onBlockSelect(item.type);
       if (item.preset) handlers.onPresetSelect(item.preset);
     });
-    palette.appendChild(btn);
+    blocksGroup.appendChild(btn);
   });
+
+  const propsGroup = document.createElement('div');
+  propsGroup.className = 'palette-group props-group';
+  const label = document.createElement('span');
+  label.className = 'palette-group-label';
+  label.textContent = '模型';
+  propsGroup.appendChild(label);
+  propModels.forEach((m, modelId) => {
+    const btn = document.createElement('button');
+    btn.className = 'palette-item';
+    btn.title = m.name;
+    const img = document.createElement('img');
+    img.src = m.icon;
+    img.alt = m.name;
+    img.draggable = false;
+    btn.appendChild(img);
+    btn.addEventListener('click', () => {
+      clearActive();
+      btn.classList.add('active');
+      handlers.onPropSelect(modelId);
+    });
+    propsGroup.appendChild(btn);
+  });
+
+  palette.appendChild(blocksGroup);
+  palette.appendChild(propsGroup);
 
   const actions = document.createElement('div');
   actions.className = 'actions';

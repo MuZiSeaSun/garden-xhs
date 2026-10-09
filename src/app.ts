@@ -15,6 +15,7 @@ import { loadWorld, saveWorld } from './platform/storage';
 import { saveToAlbum, shareAsNote } from './platform/share';
 import { bindGestures } from './input/gesture';
 import { bindUI, type EditorMode } from './ui';
+import { PROP_MODELS } from './assets/props.generated';
 import { voxelRaycast } from './core/voxel-raycast';
 import { createHistory } from './core/history';
 import { PRESETS } from './core/presets';
@@ -226,6 +227,7 @@ async function bootstrap(): Promise<void> {
     onModeChange: (m) => { mode = m; },
     onBlockSelect: (t) => { currentBlockType = t as BlockId; currentPreset = null; },
     onPresetSelect: (key) => { currentPreset = key; },
+    onPropSelect: (_modelId: number): void => {},
     onUndo: undo,
     onPerspectiveChange: (distance) => {
       setDistance(camera, distance);
@@ -268,7 +270,7 @@ async function bootstrap(): Promise<void> {
         showToast(ok ? '已拉起发布页' : '分享失败');
       })();
     },
-  });
+  }, PROP_MODELS);
 
   // 自适应
   window.addEventListener('resize', () => {

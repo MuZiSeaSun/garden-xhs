@@ -133,3 +133,17 @@ body {
   pointer-events: none;
 }
 #toast[hidden] { display: none; }
+.palette-group { display: flex; flex: 0 0 auto; }
+.palette > .palette-group + .palette-group {
+  margin-left: 6px;
+  padding-left: 8px;
+  border-left: 1px solid rgba(0, 0, 0, 0.12);
+}
+.palette-group-label {
+  flex: 0 0 auto;
+  align-self: center;
+  font-size: 11px;
+  color: #666;
+  margin-right: 4px;
+}
+.palette-item img { width: 30px; height: 30px; display: block; pointer-events: none; }
