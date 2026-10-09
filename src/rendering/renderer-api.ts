@@ -1,6 +1,12 @@
 import type { BlockId } from '../core/block-types';
+import type { PropInstance, PropModelData } from '../core/prop-types';
 
-export const RENDERER_API_VERSION = 1 as const;
+export const RENDERER_API_VERSION = 2 as const;
+
+export interface PropDelta {
+  readonly added: ReadonlyArray<PropInstance>;
+  readonly removed: ReadonlyArray<{ x: number; y: number; z: number; modelId: number }>;
+}
 
 export interface CameraState {
   readonly position: readonly [number, number, number];
@@ -74,6 +80,13 @@ export interface RendererAdapter {
   setTheme(theme: Theme): void;
   requestRender(): void;
   captureImage(): string;
+
+  /** 一次性上传模型表（可选） */
+  definePropModels?(models: readonly PropModelData[]): void;
+  /** 全量：首次加载 / 撤销 / 清空 / 恢复存档 / 切换适配器（可选） */
+  syncProps?(instances: readonly PropInstance[]): void;
+  /** 增量：正常放置 / 删除（可选） */
+  applyPropDelta?(delta: PropDelta): void;
 }
 
 export type AdapterCtor = new () => RendererAdapter;
