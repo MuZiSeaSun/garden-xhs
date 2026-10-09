@@ -11,36 +11,7 @@ import {
   type Capabilities,
 } from '../renderer-api';
 import { buildVoxelMesh } from '../../core/mesh-builder';
-
-const VERT = /* glsl */ `
-  attribute float aLight;
-  varying vec2 vUV;
-  varying vec3 vNormal;
-  varying float vLight;
-  void main() {
-    vUV = uv;
-    vNormal = normal;
-    vLight = aLight;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-  }
-`;
-
-const FRAG = /* glsl */ `
-  precision mediump float;
-  uniform sampler2D uAtlas;
-  uniform vec3 uLightDir;
-  uniform float uAmbient;
-  varying vec2 vUV;
-  varying vec3 vNormal;
-  varying float vLight;
-  void main() {
-    vec4 texColor = texture2D(uAtlas, vUV);
-    if (texColor.a < 0.1) discard;
-    float diff = max(dot(normalize(vNormal), uLightDir), 0.0);
-    vec3 color = texColor.rgb * vLight * (uAmbient + (1.0 - uAmbient) * diff);
-    gl_FragColor = vec4(color, texColor.a);
-  }
-`;
+import { kelvinToRgb, kelvinBackgroundFactor } from '../color-temperature';
 
 export interface AtlasTextureLike {
   magFilter: number;
@@ -74,12 +45,17 @@ export class ThreeAdapter implements RendererAdapter {
   private scene!: THREE.Scene;
   private camera!: THREE.PerspectiveCamera;
   private geometry!: THREE.BufferGeometry;
-  private material!: THREE.ShaderMaterial;
+  private material!: THREE.MeshLambertMaterial;
+  private ambient!: THREE.AmbientLight;
+  private sun!: THREE.DirectionalLight;
   private texture!: THREE.CanvasTexture;
   private mesh!: THREE.Mesh;
 
   private raycaster = new THREE.Raycaster();
   private canvas!: HTMLCanvasElement;
+  private tint: [number, number, number] = [1, 1, 1];
+  private bgFactor: [number, number, number] = [1, 1, 1];
+  private readonly sky = { r: 184 / 255, g: 219 / 255, b: 247 / 255 };
   private needsRender = false;
   private rafId = 0;
   private disposed = false;
@@ -99,30 +75,46 @@ export class ThreeAdapter implements RendererAdapter {
       alpha: false,
       preserveDrawingBuffer: true,
     });
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
     this.renderer.setClearColor(0xb8dbf7, 1);
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     this.scene = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera(45, 1, 0.1, 500);
+    this.camera = new THREE.PerspectiveCamera(45, 1, 1, 2000);
     this.camera.up.set(0, 1, 0);
 
     this.texture = new THREE.CanvasTexture(atlasCanvas);
     configureAtlasTexture(this.texture);
 
-    this.material = new THREE.ShaderMaterial({
-      uniforms: {
-        uAtlas: { value: this.texture },
-        uLightDir: { value: new THREE.Vector3(0.5, 1, 0.3).normalize() },
-        uAmbient: { value: 0.6 },
-      },
-      vertexShader: VERT,
-      fragmentShader: FRAG,
+    this.material = new THREE.MeshLambertMaterial({
+      map: this.texture,
+      alphaTest: 0.5,
+      vertexColors: true,
       side: THREE.DoubleSide,
     });
 
     this.geometry = new THREE.BufferGeometry();
     this.mesh = new THREE.Mesh(this.geometry, this.material);
+    this.mesh.castShadow = true;
+    this.mesh.receiveShadow = true;
     this.scene.add(this.mesh);
+
+    // 环境光 + 方向光（投射阴影）。0.6/0.4 与原先 shader 的 uAmbient=0.6 观感接近。
+    this.ambient = new THREE.AmbientLight(0xffffff, 0.6);
+    this.scene.add(this.ambient);
+    this.sun = new THREE.DirectionalLight(0xffffff, 0.4);
+    this.sun.target.position.set(5, 3, 5);
+    this.sun.position.set(0.5, 1, 0.3).normalize().multiplyScalar(60).add(this.sun.target.position);
+    this.sun.castShadow = true;
+    this.sun.shadow.mapSize.set(1024, 1024);
+    this.sun.shadow.bias = -0.0005;
+    this.sun.shadow.normalBias = 0.02;
+    const sc = this.sun.shadow.camera;
+    sc.left = -14; sc.right = 14; sc.top = 14; sc.bottom = -14; sc.near = 1; sc.far = 160;
+    sc.updateProjectionMatrix();
+    this.scene.add(this.sun);
+    this.scene.add(this.sun.target);
 
     canvas.addEventListener('webglcontextlost', this.onContextLost);
     canvas.addEventListener('webglcontextrestored', this.onContextRestored);
@@ -152,7 +144,7 @@ export class ThreeAdapter implements RendererAdapter {
   };
 
   resize(width: number, height: number, dpr: number): void {
-    this.renderer.setPixelRatio(Math.min(dpr, 2));
+    this.renderer.setPixelRatio(Math.min(dpr, 1.5));
     this.renderer.setSize(width, height, false);
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
@@ -195,7 +187,12 @@ export class ThreeAdapter implements RendererAdapter {
     g.setAttribute('position', new THREE.BufferAttribute(mesh.positions, 3));
     g.setAttribute('normal',   new THREE.BufferAttribute(mesh.normals, 3));
     g.setAttribute('uv',       new THREE.BufferAttribute(mesh.uvs, 2));
-    g.setAttribute('aLight',   new THREE.BufferAttribute(mesh.lights, 1));
+    const colors = new Float32Array(mesh.lights.length * 3);
+    for (let i = 0; i < mesh.lights.length; i++) {
+      const l = mesh.lights[i];
+      colors[i * 3] = l; colors[i * 3 + 1] = l; colors[i * 3 + 2] = l;
+    }
+    g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     g.setIndex(new THREE.BufferAttribute(mesh.indices, 1));
     g.computeBoundingSphere();
   }
@@ -215,8 +212,23 @@ export class ThreeAdapter implements RendererAdapter {
   }
 
   setTheme(theme: Theme): void {
+    if (theme.exposure !== undefined) {
+      this.ambient.intensity = 0.6 * theme.exposure;
+      this.sun.intensity = 0.4 * theme.exposure;
+    }
+    if (theme.temperature !== undefined) {
+      this.tint = kelvinToRgb(theme.temperature);
+      this.bgFactor = kelvinBackgroundFactor(theme.temperature);
+      this.ambient.color.setRGB(this.tint[0], this.tint[1], this.tint[2]);
+      this.sun.color.setRGB(this.tint[0], this.tint[1], this.tint[2]);
+    }
     if (theme.background !== undefined) {
       this.renderer.setClearColor(theme.background, 1);
+    } else {
+      const f = this.bgFactor;
+      this.renderer.setClearColor(
+        new THREE.Color().setRGB(this.sky.r * f[0], this.sky.g * f[1], this.sky.b * f[2], THREE.SRGBColorSpace),
+      );
     }
     this.requestRender();
   }

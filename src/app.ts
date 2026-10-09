@@ -8,6 +8,8 @@ import {
   toRendererCameraState,
   orbit,
   zoom,
+  fitViewport,
+  setDistance,
 } from './core/camera-state';
 import { loadWorld, saveWorld } from './platform/storage';
 import { saveToAlbum, shareAsNote } from './platform/share';
@@ -20,14 +22,17 @@ import { BLOCK, type BlockId } from './core/block-types';
 import type { RendererAdapter, BlockDelta } from './rendering/renderer-api';
 
 async function bootstrap(): Promise<void> {
-  const canvas = document.getElementById('scene') as HTMLCanvasElement | null;
-  if (!canvas) return;
+  const initialCanvas = document.getElementById('scene') as HTMLCanvasElement | null;
+  if (!initialCanvas) return;
+  let canvas: HTMLCanvasElement = initialCanvas;
 
   const caps = detectCapabilities();
   const atlasCanvas = generateAtlas();
   const world = createWorld();
   const camera = createCameraOrbit();
   const history = createHistory();
+  let exposure = 1.3;
+  let temperature = 5000;
 
   let renderer: RendererAdapter;
   try {
@@ -45,8 +50,11 @@ async function bootstrap(): Promise<void> {
     return;
   }
 
+  renderer.setTheme({ exposure });
+
   // 先铺一层草地并首次渲染，避免首屏空白，也不被存档 I/O 阻塞。
   seedGround(world);
+  fitViewport(camera, canvas.clientWidth / canvas.clientHeight);
   renderer.resize(canvas.clientWidth, canvas.clientHeight, window.devicePixelRatio || 1);
   renderer.syncWorld(world.snapshot());
   renderer.setCamera(toRendererCameraState(camera));
@@ -66,6 +74,7 @@ async function bootstrap(): Promise<void> {
   let mode: EditorMode = 'orbit';
   let currentBlockType: BlockId = BLOCK.GRASS;
   let currentPreset: string | null = null;
+  let userZoomed = false;
 
   // 自动保存（debounce）
   let saveTimer = 0;
@@ -88,7 +97,8 @@ async function bootstrap(): Promise<void> {
 
   const handleTap = (x: number, y: number): void => {
     const ray = renderer.screenPointToRay(x, y);
-    const hit = voxelRaycast(ray.origin, ray.direction, world, 100);
+    // 相机（长焦）距离很远，射线要能走完整段距离才够到场地。
+    const hit = voxelRaycast(ray.origin, ray.direction, world, camera.radius * 2);
 
     if (mode === 'place') {
       if (currentPreset) {
@@ -133,17 +143,19 @@ async function bootstrap(): Promise<void> {
   };
 
   // 手势
-  bindGestures(canvas, {
-    onOrbit: (dx, dy) => {
+  const gestureHandlers = {
+    onOrbit: (dx: number, dy: number): void => {
       orbit(camera, dx, dy);
       renderer.setCamera(toRendererCameraState(camera));
     },
-    onZoom: (factor) => {
+    onZoom: (factor: number): void => {
+      userZoomed = true;
       zoom(camera, factor);
       renderer.setCamera(toRendererCameraState(camera));
     },
     onTap: handleTap,
-  });
+  };
+  let disposeGestures = bindGestures(canvas, gestureHandlers);
 
   // UI
   const undo = (): void => {
@@ -176,11 +188,60 @@ async function bootstrap(): Promise<void> {
     toastTimer = window.setTimeout(() => toast.setAttribute('hidden', ''), 1500);
   };
 
+  const switchRenderer = async (preferred: string): Promise<void> => {
+    // 一个 canvas 只能绑定一种 WebGL 上下文，切换时必须换一块新 canvas
+    const nextCanvas = document.createElement('canvas');
+    nextCanvas.id = 'scene';
+    let next: RendererAdapter;
+    try {
+      next = await createRenderer({
+        canvas: nextCanvas,
+        atlasCanvas,
+        devicePixelRatio: window.devicePixelRatio || 1,
+      }, caps, preferred);
+    } catch {
+      showToast('切换失败');
+      return;
+    }
+    if (next.name === 'null') {
+      next.dispose();
+      showToast('该适配器不可用');
+      return;
+    }
+    disposeGestures();
+    const old = canvas;
+    canvas = nextCanvas;
+    old.replaceWith(nextCanvas);
+    renderer.dispose();
+    renderer = next;
+    disposeGestures = bindGestures(canvas, gestureHandlers);
+      next.setTheme({ exposure, temperature });
+    next.resize(canvas.clientWidth, canvas.clientHeight, window.devicePixelRatio || 1);
+    next.syncWorld(world.snapshot());
+    next.setCamera(toRendererCameraState(camera));
+    showToast(`适配器：${next.name}`);
+  };
+
   bindUI({
     onModeChange: (m) => { mode = m; },
     onBlockSelect: (t) => { currentBlockType = t as BlockId; currentPreset = null; },
     onPresetSelect: (key) => { currentPreset = key; },
     onUndo: undo,
+    onPerspectiveChange: (distance) => {
+      setDistance(camera, distance);
+      renderer.setCamera(toRendererCameraState(camera));
+    },
+    onAdapterChange: (name) => {
+      void switchRenderer(name);
+    },
+    onLightingChange: (value) => {
+      exposure = value;
+      renderer.setTheme({ exposure, temperature });
+    },
+    onTemperatureChange: (kelvin) => {
+      temperature = kelvin;
+      renderer.setTheme({ exposure, temperature });
+    },
     onReset: () => {
       world.clear();
       seedGround(world);
@@ -211,6 +272,7 @@ async function bootstrap(): Promise<void> {
 
   // 自适应
   window.addEventListener('resize', () => {
+    if (!userZoomed) fitViewport(camera, canvas.clientWidth / canvas.clientHeight);
     renderer.resize(canvas.clientWidth, canvas.clientHeight, window.devicePixelRatio || 1);
     renderer.setCamera(toRendererCameraState(camera));
   });

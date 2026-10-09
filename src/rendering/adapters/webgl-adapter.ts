@@ -10,6 +10,7 @@ import {
   type Capabilities,
 } from '../renderer-api';
 import { buildVoxelMesh, type MeshData } from '../../core/mesh-builder';
+import { kelvinToRgb, kelvinBackgroundFactor } from '../color-temperature';
 
 type V3 = number[];
 
@@ -32,18 +33,26 @@ const VERT = /* glsl */ `
 
 const FRAG = /* glsl */ `
   precision mediump float;
+  #define RECIPROCAL_PI 0.31830988618
   uniform sampler2D uAtlas;
   uniform vec3 uLightDir;
   uniform float uAmbient;
+  uniform float uExposure;
+  uniform vec3 uLightTint;
   varying vec2 vUV;
   varying vec3 vNormal;
   varying float vLight;
+  vec3 toSRGB(vec3 c) {
+    c = max(c, vec3(0.0));
+    return mix(c * 12.92, 1.055 * pow(c, vec3(0.4166667)) - 0.055, step(vec3(0.0031308), c));
+  }
   void main() {
     vec4 texColor = texture2D(uAtlas, vUV);
     if (texColor.a < 0.1) discard;
     float diff = max(dot(normalize(vNormal), uLightDir), 0.0);
-    vec3 color = texColor.rgb * vLight * (uAmbient + (1.0 - uAmbient) * diff);
-    gl_FragColor = vec4(color, texColor.a);
+    // 与 Three 的 Lambert 管线保持一致：光照乘 1/π（BRDF 归一化），最后做 linear→sRGB 输出编码
+    vec3 lit = texColor.rgb * vLight * (uAmbient + (1.0 - uAmbient) * diff) * uExposure * RECIPROCAL_PI * uLightTint;
+    gl_FragColor = vec4(toSRGB(lit), texColor.a);
   }
 `;
 
@@ -112,6 +121,8 @@ export class WebGLAdapter implements RendererAdapter {
   private uAtlas!: WebGLUniformLocation | null;
   private uLightDir!: WebGLUniformLocation | null;
   private uAmbient!: WebGLUniformLocation | null;
+  private uExposure!: WebGLUniformLocation | null;
+  private uLightTint!: WebGLUniformLocation | null;
 
   private matrix = new Float32Array(16);
   private projMat = new Float32Array(16);
@@ -120,6 +131,9 @@ export class WebGLAdapter implements RendererAdapter {
   private indexCount = 0;
   private aspect = 1;
   private dpr = 1;
+  private tint: [number, number, number] = [1, 1, 1];
+  private bgFactor: [number, number, number] = [1, 1, 1];
+  private readonly sky = { r: 184 / 255, g: 219 / 255, b: 247 / 255 };
   private cameraState: CameraState | null = null;
   private lastSnapshot: WorldSnapshot | null = null;
 
@@ -134,7 +148,7 @@ export class WebGLAdapter implements RendererAdapter {
   async init(opts: RendererInitOptions): Promise<void> {
     const { canvas, atlasCanvas, devicePixelRatio } = opts;
     this.canvas = canvas;
-    this.dpr = Math.min(devicePixelRatio || 1, 2);
+    this.dpr = Math.min(devicePixelRatio || 1, 1.5);
 
     const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
     if (!gl) throw new Error('webgl context unavailable');
@@ -151,6 +165,8 @@ export class WebGLAdapter implements RendererAdapter {
     this.uAtlas = this.gl.getUniformLocation(this.program, 'uAtlas');
     this.uLightDir = this.gl.getUniformLocation(this.program, 'uLightDir');
     this.uAmbient = this.gl.getUniformLocation(this.program, 'uAmbient');
+    this.uExposure = this.gl.getUniformLocation(this.program, 'uExposure');
+    this.uLightTint = this.gl.getUniformLocation(this.program, 'uLightTint');
 
     this.posBuf = this.gl.createBuffer()!;
     this.nrmBuf = this.gl.createBuffer()!;
@@ -162,6 +178,8 @@ export class WebGLAdapter implements RendererAdapter {
     const ldir = normalize([0.5, 1, 0.3]);
     this.gl.uniform3f(this.uLightDir, ldir[0], ldir[1], ldir[2]);
     this.gl.uniform1f(this.uAmbient, 0.6);
+    this.gl.uniform1f(this.uExposure, 1);
+    this.gl.uniform3f(this.uLightTint, 1, 1, 1);
 
     this.tex = this.gl.createTexture()!;
     this.gl.activeTexture(this.gl.TEXTURE0);
@@ -209,7 +227,7 @@ export class WebGLAdapter implements RendererAdapter {
   };
 
   resize(width: number, height: number, dpr: number): void {
-    this.dpr = Math.min(dpr || 1, 2);
+    this.dpr = Math.min(dpr || 1, 1.5);
     this.canvas.width = Math.max(1, Math.floor(width * this.dpr));
     this.canvas.height = Math.max(1, Math.floor(height * this.dpr));
     this.aspect = width / height;
@@ -287,11 +305,23 @@ export class WebGLAdapter implements RendererAdapter {
   }
 
   setTheme(theme: Theme): void {
+    this.gl.useProgram(this.program);
+    if (theme.exposure !== undefined) {
+      this.gl.uniform1f(this.uExposure, theme.exposure);
+    }
+    if (theme.temperature !== undefined) {
+      this.tint = kelvinToRgb(theme.temperature);
+      this.bgFactor = kelvinBackgroundFactor(theme.temperature);
+      this.gl.uniform3f(this.uLightTint, this.tint[0], this.tint[1], this.tint[2]);
+    }
     if (theme.background !== undefined) {
       const r = ((theme.background >> 16) & 0xff) / 255;
       const g = ((theme.background >> 8) & 0xff) / 255;
       const b = (theme.background & 0xff) / 255;
       this.gl.clearColor(r, g, b, 1);
+    } else {
+      const f = this.bgFactor;
+      this.gl.clearColor(this.sky.r * f[0], this.sky.g * f[1], this.sky.b * f[2], 1);
     }
     this.requestRender();
   }

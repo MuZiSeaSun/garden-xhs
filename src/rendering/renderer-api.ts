@@ -6,7 +6,7 @@ export interface CameraState {
   readonly position: readonly [number, number, number];
   readonly target: readonly [number, number, number];
   readonly up: readonly [number, number, number];
-  /** 垂直视场角，单位：弧度（radians）。Three 适配器内部转为角度。 */
+  /** 垂直视场角（弧度）。取很小的值（长焦）以近似正交投影。 */
   readonly fov: number;
   readonly near: number;
   readonly far: number;
@@ -32,6 +32,10 @@ export interface Theme {
   readonly fogColor?: number;
   readonly fogNear?: number;
   readonly fogFar?: number;
+  /** 全局光照强度倍数（1 = 默认，越大越亮）。 */
+  readonly exposure?: number;
+  /** 光照色温（开尔文）。 */
+  readonly temperature?: number;
 }
 
 export interface RendererInitOptions {

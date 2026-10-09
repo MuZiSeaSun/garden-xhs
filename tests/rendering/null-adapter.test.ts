@@ -7,7 +7,7 @@ describe('NullAdapter', () => {
     expect(a.name).toBe('null');
     await a.init({} as never);
     a.resize(1, 1, 1);
-    a.setCamera({ position: [0, 0, 0], target: [0, 0, 0], up: [0, 1, 0], fov: 1, near: 0.1, far: 100 });
+    a.setCamera({ position: [0, 0, 0], target: [0, 0, 0], up: [0, 1, 0], fov: 0.04, near: 1, far: 2000 });
     a.syncWorld({ size: 0, blocks: new Uint8Array(0) });
     a.applyBlockDelta({ added: [], removed: [] });
     a.setTheme({ background: 0 });

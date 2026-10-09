@@ -17,13 +17,24 @@ const ADAPTER_PRIORITY: readonly AdapterCtor[] = [
   NullAdapter,
 ];
 
+const BY_NAME: Readonly<Record<string, AdapterCtor>> = {
+  three: ThreeAdapter,
+  webgl: WebGLAdapter,
+  null: NullAdapter,
+};
+
 export async function createRenderer(
   opts: RendererInitOptions,
   caps: Capabilities,
+  preferred?: string,
 ): Promise<RendererAdapter> {
+  let order: readonly AdapterCtor[] = ADAPTER_PRIORITY;
+  const want = preferred && preferred !== 'auto' ? BY_NAME[preferred] : undefined;
+  if (want) order = [want, ...ADAPTER_PRIORITY.filter((c) => c !== want)];
+
   const errors: Array<{ name: string; error: unknown }> = [];
 
-  for (const Ctor of ADAPTER_PRIORITY) {
+  for (const Ctor of order) {
     const instance = new Ctor();
     if (!instance.isSupported(caps)) continue;
 

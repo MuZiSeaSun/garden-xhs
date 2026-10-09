@@ -27,12 +27,37 @@ describe('buildVoxelMesh', () => {
     expect(m.positions.length / 3).toBe(8);
     expect(m.indices.length).toBe(12);
   });
-  it('maps LEAF (atlas 8) into column 8 of a 16-column atlas', () => {
+  it('does not let a cross block cull an adjacent solid face (flowers are non-occluding)', () => {
+    const w = createWorld();
+    w.setBlock(0, 0, 0, BLOCK.STONE);
+    w.setBlock(0, 1, 0, BLOCK.FLOWER_RED);
+    const m = buildVoxelMesh(w.snapshot());
+    // stone keeps all 6 faces (24 verts) + flower 2 quads (8 verts) = 32
+    expect(m.positions.length / 3).toBe(32);
+  });
+  it('applies ambient occlusion: a diagonal neighbour darkens the occluded face corners', () => {
+    const w = createWorld();
+    w.setBlock(0, 0, 0, BLOCK.STONE);
+    w.setBlock(1, 1, 0, BLOCK.STONE);
+    const m = buildVoxelMesh(w.snapshot());
+    // A(0,0,0) +X face is the first 4 light values (FACES order starts with +X); its top
+    // vertices (idx 2,3) are occluded by the diagonal block at (1,1,0)
+    expect(m.lights[2]).toBeLessThan(0.8);
+    expect(m.lights[3]).toBeLessThan(0.8);
+    expect(m.lights[0]).toBeCloseTo(0.8, 5);
+    expect(m.lights[1]).toBeCloseTo(0.8, 5);
+  });
+  it('has no AO on an isolated block (lights equal the per-face values)', () => {
+    const m = meshWith(BLOCK.STONE);
+    expect(Math.max(...Array.from(m.lights))).toBeCloseTo(1.0, 5);
+    expect(Math.min(...Array.from(m.lights))).toBeCloseTo(0.5, 5);
+  });
+  it('maps LEAF (atlas 8) strictly inside column 8 (half-texel inset, no bleed)', () => {
     const m = meshWith(BLOCK.LEAF);
     const us = Array.from(m.uvs).filter((_, i) => i % 2 === 0);
     for (const u of us) {
-      expect(u).toBeGreaterThanOrEqual(8 / 16);
-      expect(u).toBeLessThanOrEqual(9 / 16);
+      expect(u).toBeGreaterThan(8 / 16);
+      expect(u).toBeLessThan(9 / 16);
     }
   });
 });

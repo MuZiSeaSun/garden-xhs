@@ -14,4 +14,16 @@ describe('createRenderer', () => {
     const r = await createRenderer({ canvas, atlasCanvas: atlas, devicePixelRatio: 1 }, noCaps);
     expect(r.name).toBe('null');
   });
+  it('accepts a preferred adapter and still falls back safely when it cannot init', async () => {
+    const canvas = document.createElement('canvas');
+    const atlas = document.createElement('canvas');
+    const r = await createRenderer({ canvas, atlasCanvas: atlas, devicePixelRatio: 1 }, noCaps, 'three');
+    expect(r.name).toBe('null');
+  });
+  it('ignores an unknown preferred name', async () => {
+    const canvas = document.createElement('canvas');
+    const atlas = document.createElement('canvas');
+    const r = await createRenderer({ canvas, atlasCanvas: atlas, devicePixelRatio: 1 }, noCaps, 'bogus');
+    expect(r.name).toBe('null');
+  });
 });

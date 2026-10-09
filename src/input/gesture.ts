@@ -12,6 +12,9 @@ export function bindGestures(canvas: HTMLCanvasElement, handlers: GestureHandler
   let lastY = 0;
   let movedDistance = 0;
   let pinchDist = 0;
+  // 触摸后浏览器会补发一次合成鼠标事件；用时间戳丢弃它，避免一次点击触发两次操作
+  let lastTouchTs = 0;
+  const SYNTHETIC_MOUSE_MS = 600;
 
   const getPinchDistance = (touches: TouchList): number => {
     const dx = touches[0].clientX - touches[1].clientX;
@@ -20,6 +23,7 @@ export function bindGestures(canvas: HTMLCanvasElement, handlers: GestureHandler
   };
 
   const onTouchStart = (e: TouchEvent): void => {
+    lastTouchTs = Date.now();
     if (e.touches.length === 1) {
       dragging = true;
       movedDistance = 0;
@@ -51,6 +55,7 @@ export function bindGestures(canvas: HTMLCanvasElement, handlers: GestureHandler
   };
 
   const onTouchEnd = (e: TouchEvent): void => {
+    lastTouchTs = Date.now();
     if (dragging && movedDistance < TAP_THRESHOLD) {
       const touch = e.changedTouches[0];
       handlers.onTap(touch.clientX, touch.clientY);
@@ -60,6 +65,7 @@ export function bindGestures(canvas: HTMLCanvasElement, handlers: GestureHandler
   };
 
   const onMouseDown = (e: MouseEvent): void => {
+    if (Date.now() - lastTouchTs < SYNTHETIC_MOUSE_MS) return;
     dragging = true;
     movedDistance = 0;
     lastX = e.clientX;
@@ -67,6 +73,7 @@ export function bindGestures(canvas: HTMLCanvasElement, handlers: GestureHandler
   };
 
   const onMouseMove = (e: MouseEvent): void => {
+    if (Date.now() - lastTouchTs < SYNTHETIC_MOUSE_MS) return;
     if (!dragging) return;
     const dx = e.clientX - lastX;
     const dy = e.clientY - lastY;
@@ -77,6 +84,7 @@ export function bindGestures(canvas: HTMLCanvasElement, handlers: GestureHandler
   };
 
   const onMouseUp = (e: MouseEvent): void => {
+    if (Date.now() - lastTouchTs < SYNTHETIC_MOUSE_MS) return;
     if (dragging && movedDistance < TAP_THRESHOLD) {
       handlers.onTap(e.clientX, e.clientY);
     }
