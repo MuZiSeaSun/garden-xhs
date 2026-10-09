@@ -19,6 +19,9 @@ const FORBIDDEN: Array<[string, RegExp]> = [
   ['EventSource', /\bEventSource\b/],
   ['new Worker(', /new\s+Worker\s*\(/],
   ['WebAssembly', /\bWebAssembly\b/],
+  ['GLTFLoader', /GLTFLoader/],
+  ['three/examples', /three\/examples/],
+  ['node:zlib', /node:zlib/],
 ];
 
 describe('bundle scan', () => {
@@ -37,5 +40,11 @@ describe('bundle scan', () => {
     const src = readFileSync(BUNDLE, 'utf8');
     expect(src.includes('(function')).toBe(true);
     expect(src.length).toBeLessThan(5 * 1024 * 1024);
+  });
+
+  it('ships the baked prop models as base64 data', () => {
+    const src = readFileSync(BUNDLE, 'utf8');
+    expect(src.includes('atob(')).toBe(true);
+    expect(src.includes('data:image/png;base64,')).toBe(true);
   });
 });
