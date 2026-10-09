@@ -8,9 +8,12 @@ import {
   type Ray,
   type Theme,
   type Capabilities,
+  type PropDelta,
 } from '../renderer-api';
 import { buildVoxelMesh, type MeshData } from '../../core/mesh-builder';
 import { kelvinToRgb, kelvinBackgroundFactor } from '../color-temperature';
+import type { PropInstance, PropModelData } from '../../core/prop-types';
+import { buildPropBatch } from '../../core/prop-mesh-builder';
 
 type V3 = number[];
 
@@ -53,6 +56,40 @@ const FRAG = /* glsl */ `
     // 与 Three 的 Lambert 管线保持一致：光照乘 1/π（BRDF 归一化），最后做 linear→sRGB 输出编码
     vec3 lit = texColor.rgb * vLight * (uAmbient + (1.0 - uAmbient) * diff) * uExposure * RECIPROCAL_PI * uLightTint;
     gl_FragColor = vec4(toSRGB(lit), texColor.a);
+  }
+`;
+
+const PROP_VERT = /* glsl */ `
+  attribute vec3 position;
+  attribute vec3 normal;
+  attribute vec3 aColor;
+  uniform mat4 uMatrix;
+  varying vec3 vNormal;
+  varying vec3 vColor;
+  void main() {
+    vNormal = normal;
+    vColor = aColor;
+    gl_Position = uMatrix * vec4(position, 1.0);
+  }
+`;
+
+const PROP_FRAG = /* glsl */ `
+  precision mediump float;
+  #define RECIPROCAL_PI 0.31830988618
+  uniform vec3 uLightDir;
+  uniform float uAmbient;
+  uniform float uExposure;
+  uniform vec3 uLightTint;
+  varying vec3 vNormal;
+  varying vec3 vColor;
+  vec3 toSRGB(vec3 c) {
+    c = max(c, vec3(0.0));
+    return mix(c * 12.92, 1.055 * pow(c, vec3(0.4166667)) - 0.055, step(vec3(0.0031308), c));
+  }
+  void main() {
+    float diff = max(dot(normalize(vNormal), uLightDir), 0.0);
+    vec3 lit = vColor * (uAmbient + (1.0 - uAmbient) * diff) * uExposure * RECIPROCAL_PI * uLightTint;
+    gl_FragColor = vec4(toSRGB(lit), 1.0);
   }
 `;
 
@@ -141,6 +178,20 @@ export class WebGLAdapter implements RendererAdapter {
   private rafId = 0;
   private disposed = false;
 
+  private propProgram!: WebGLProgram;
+  private pAPos = 0;
+  private pANrm = 0;
+  private pACol = 0;
+  private pMatrix!: WebGLUniformLocation | null;
+  private pExposure!: WebGLUniformLocation | null;
+  private pLightTint!: WebGLUniformLocation | null;
+  private propBatches: Array<{
+    modelId: number; posBuf: WebGLBuffer; nrmBuf: WebGLBuffer;
+    colBuf: WebGLBuffer; idxBuf: WebGLBuffer; count: number;
+  }> = [];
+  private propModels: readonly PropModelData[] = [];
+  private propInstByModel = new Map<number, PropInstance[]>();
+
   isSupported(caps: Capabilities): boolean {
     return caps.webgl;
   }
@@ -181,6 +232,23 @@ export class WebGLAdapter implements RendererAdapter {
     this.gl.uniform1f(this.uExposure, 1);
     this.gl.uniform3f(this.uLightTint, 1, 1, 1);
 
+    this.propProgram = this.createProgram(PROP_VERT, PROP_FRAG);
+    this.gl.useProgram(this.propProgram);
+    this.pAPos = this.gl.getAttribLocation(this.propProgram, 'position');
+    this.pANrm = this.gl.getAttribLocation(this.propProgram, 'normal');
+    this.pACol = this.gl.getAttribLocation(this.propProgram, 'aColor');
+    this.pMatrix = this.gl.getUniformLocation(this.propProgram, 'uMatrix');
+    this.pExposure = this.gl.getUniformLocation(this.propProgram, 'uExposure');
+    this.pLightTint = this.gl.getUniformLocation(this.propProgram, 'uLightTint');
+    const ldir2 = normalize([0.5, 1, 0.3]);
+    this.gl.uniform3f(this.gl.getUniformLocation(this.propProgram, 'uLightDir'), ldir2[0], ldir2[1], ldir2[2]);
+    this.gl.uniform1f(this.gl.getUniformLocation(this.propProgram, 'uAmbient'), 0.6);
+    this.gl.uniform1f(this.pExposure, 1);
+    this.gl.uniform3f(this.pLightTint, 1, 1, 1);
+    if (!this.gl.getExtension('OES_element_index_uint')) {
+      throw new Error('OES_element_index_uint unavailable'); // 工厂降级到其余适配器
+    }
+
     this.tex = this.gl.createTexture()!;
     this.gl.activeTexture(this.gl.TEXTURE0);
     this.gl.bindTexture(this.gl.TEXTURE_2D, this.tex);
@@ -212,6 +280,8 @@ export class WebGLAdapter implements RendererAdapter {
     gl.deleteBuffer(this.lightBuf);
     gl.deleteBuffer(this.idxBuf);
     gl.deleteTexture(this.tex);
+    for (const b of this.propBatches.splice(0, this.propBatches.length)) this.deleteBatch(b);
+    gl.deleteProgram(this.propProgram);
     gl.deleteProgram(this.program);
   }
 
@@ -263,6 +333,76 @@ export class WebGLAdapter implements RendererAdapter {
     for (const b of delta.added) blocks[idx(b.x, b.y, b.z)] = b.type;
     this.uploadMesh(buildVoxelMesh(this.lastSnapshot));
     this.requestRender();
+  }
+
+  definePropModels(models: readonly PropModelData[]): void {
+    this.propModels = models;
+  }
+
+  syncProps(instances: readonly PropInstance[]): void {
+    if (!this.gl) return; // init 前安全 no-op
+    this.propInstByModel = new Map();
+    for (const p of instances) {
+      const list = this.propInstByModel.get(p.modelId);
+      if (list) list.push(p);
+      else this.propInstByModel.set(p.modelId, [p]);
+    }
+    for (const b of this.propBatches.splice(0, this.propBatches.length)) this.deleteBatch(b);
+    for (const id of this.propInstByModel.keys()) this.rebuildPropBatch(id);
+    this.requestRender();
+  }
+
+  applyPropDelta(delta: PropDelta): void {
+    if (!this.gl) return;
+    const affected = new Set<number>();
+    for (const p of delta.added) {
+      const list = this.propInstByModel.get(p.modelId);
+      if (list) list.push(p);
+      else this.propInstByModel.set(p.modelId, [p]);
+      affected.add(p.modelId);
+    }
+    for (const r of delta.removed) {
+      const list = this.propInstByModel.get(r.modelId);
+      if (list) {
+        const i = list.findIndex((q) => q.x === r.x && q.y === r.y && q.z === r.z);
+        if (i >= 0) list.splice(i, 1);
+        affected.add(r.modelId);
+      }
+    }
+    for (const id of affected) this.rebuildPropBatch(id);
+    this.requestRender();
+  }
+
+  private deleteBatch(b: { posBuf: WebGLBuffer; nrmBuf: WebGLBuffer; colBuf: WebGLBuffer; idxBuf: WebGLBuffer }): void {
+    this.gl.deleteBuffer(b.posBuf);
+    this.gl.deleteBuffer(b.nrmBuf);
+    this.gl.deleteBuffer(b.colBuf);
+    this.gl.deleteBuffer(b.idxBuf);
+  }
+
+  private rebuildPropBatch(modelId: number): void {
+    const gl = this.gl;
+    const i = this.propBatches.findIndex((b) => b.modelId === modelId);
+    if (i >= 0) {
+      this.deleteBatch(this.propBatches[i]);
+      this.propBatches.splice(i, 1);
+    }
+    const insts = this.propInstByModel.get(modelId) ?? [];
+    if (insts.length === 0) return;
+    const batch = buildPropBatch(this.propModels, insts, modelId);
+    const posBuf = gl.createBuffer()!;
+    gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, batch.positions, gl.STATIC_DRAW);
+    const nrmBuf = gl.createBuffer()!;
+    gl.bindBuffer(gl.ARRAY_BUFFER, nrmBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, batch.normals, gl.STATIC_DRAW);
+    const colBuf = gl.createBuffer()!;
+    gl.bindBuffer(gl.ARRAY_BUFFER, colBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, batch.colors, gl.STATIC_DRAW);
+    const idxBuf = gl.createBuffer()!;
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, batch.indices, gl.STATIC_DRAW);
+    this.propBatches.push({ modelId, posBuf, nrmBuf, colBuf, idxBuf, count: batch.indices.length });
   }
 
   private uploadMesh(mesh: MeshData): void {
@@ -323,6 +463,13 @@ export class WebGLAdapter implements RendererAdapter {
       const f = this.bgFactor;
       this.gl.clearColor(this.sky.r * f[0], this.sky.g * f[1], this.sky.b * f[2], 1);
     }
+    if (this.propProgram) {
+      this.gl.useProgram(this.propProgram);
+      if (theme.exposure !== undefined) this.gl.uniform1f(this.pExposure, theme.exposure);
+      if (theme.temperature !== undefined) {
+        this.gl.uniform3f(this.pLightTint, this.tint[0], this.tint[1], this.tint[2]);
+      }
+    }
     this.requestRender();
   }
 
@@ -343,6 +490,23 @@ export class WebGLAdapter implements RendererAdapter {
       gl.uniformMatrix4fv(this.uMatrix, false, this.matrix);
       this.bindAttributes();
       gl.drawElements(gl.TRIANGLES, this.indexCount, gl.UNSIGNED_SHORT, 0);
+    }
+    if (this.propBatches.length > 0 && this.cameraState) {
+      gl.useProgram(this.propProgram);
+      gl.uniformMatrix4fv(this.pMatrix, false, this.matrix);
+      for (const b of this.propBatches) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, b.posBuf);
+        gl.enableVertexAttribArray(this.pAPos);
+        gl.vertexAttribPointer(this.pAPos, 3, gl.FLOAT, false, 0, 0);
+        gl.bindBuffer(gl.ARRAY_BUFFER, b.nrmBuf);
+        gl.enableVertexAttribArray(this.pANrm);
+        gl.vertexAttribPointer(this.pANrm, 3, gl.FLOAT, false, 0, 0);
+        gl.bindBuffer(gl.ARRAY_BUFFER, b.colBuf);
+        gl.enableVertexAttribArray(this.pACol);
+        gl.vertexAttribPointer(this.pACol, 3, gl.FLOAT, false, 0, 0);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, b.idxBuf);
+        gl.drawElements(gl.TRIANGLES, b.count, gl.UNSIGNED_INT, 0);
+      }
     }
   };
 
