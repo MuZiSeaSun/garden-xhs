@@ -1,6 +1,7 @@
 // 构建期烘焙脚本：纯 Node、零新增依赖；不进入产物。
 // 运行：npm run bake:props（Node ≥22.6 原生剥离 .ts 类型）
 import { inflateSync } from 'node:zlib';
+import type { PropModelData } from '../src/core/prop-types';
 
 export interface RawGltfMesh {
   readonly positions: Float32Array; // 3/顶点
@@ -191,4 +192,61 @@ function concatU8(parts: Uint8Array[]): Uint8Array {
   let off = 0;
   for (const p of parts) { out.set(p, off); off += p.length; }
   return out;
+}
+
+export type BakedModel = PropModelData;
+
+export function bakeModel(
+  name: string, icon: string, raw: RawGltfMesh, tex: RgbaImage, size: number,
+): BakedModel {
+  const tris = raw.indices.length / 3;
+  // 原始包围盒
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  for (let i = 0; i < raw.positions.length; i += 3) {
+    minX = Math.min(minX, raw.positions[i]); maxX = Math.max(maxX, raw.positions[i]);
+    minY = Math.min(minY, raw.positions[i + 1]); maxY = Math.max(maxY, raw.positions[i + 1]);
+    minZ = Math.min(minZ, raw.positions[i + 2]); maxZ = Math.max(maxZ, raw.positions[i + 2]);
+  }
+  const scale = size / Math.max(maxX - minX, maxZ - minZ, 1e-9);
+  const positions = new Float32Array(tris * 9);
+  const normals = new Float32Array(tris * 9);
+  const colors = new Float32Array(tris * 9);
+  for (let t = 0; t < tris; t++) {
+    const ia = raw.indices[t * 3], ib = raw.indices[t * 3 + 1], ic = raw.indices[t * 3 + 2];
+    const ax = raw.positions[ia * 3], ay = raw.positions[ia * 3 + 1], az = raw.positions[ia * 3 + 2];
+    const bx = raw.positions[ib * 3], by = raw.positions[ib * 3 + 1], bz = raw.positions[ib * 3 + 2];
+    const cx = raw.positions[ic * 3], cy = raw.positions[ic * 3 + 1], cz = raw.positions[ic * 3 + 2];
+    // 平面法线 = 面叉积归一化（实测顶点跨面共享、NORMAL 为平滑法线，不采用）
+    let nx = (by - ay) * (cz - az) - (bz - az) * (cy - ay);
+    let ny = (bz - az) * (cx - ax) - (bx - ax) * (cz - az);
+    let nz = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+    const nl = Math.hypot(nx, ny, nz) || 1;
+    nx /= nl; ny /= nl; nz /= nl;
+    // 面中心 UV → colormap 最近纹素（glTF UV 左上原点、v 向下，PNG 行序自上而下，无需 flip）
+    const u = (raw.uvs[ia * 2] + raw.uvs[ib * 2] + raw.uvs[ic * 2]) / 3;
+    const v = (raw.uvs[ia * 2 + 1] + raw.uvs[ib * 2 + 1] + raw.uvs[ic * 2 + 1]) / 3;
+    const px = Math.min(tex.width - 1, Math.max(0, Math.round(u * (tex.width - 1))));
+    const py = Math.min(tex.height - 1, Math.max(0, Math.round(v * (tex.height - 1))));
+    const ti = (py * tex.width + px) * 4;
+    const r = tex.rgba[ti] / 255, g = tex.rgba[ti + 1] / 255, b = tex.rgba[ti + 2] / 255;
+    for (let k = 0; k < 3; k++) {
+      const vi = raw.indices[t * 3 + k];
+      const ox = raw.positions[vi * 3], oy = raw.positions[vi * 3 + 1], oz = raw.positions[vi * 3 + 2];
+      const o = t * 9 + k * 3;
+      // 缩放 → 水平居中（模型中心移到 footprint 区域中心）、底面归零
+      positions[o] = (ox - (minX + maxX) / 2) * scale;
+      positions[o + 1] = (oy - minY) * scale;
+      positions[o + 2] = (oz - (minZ + maxZ) / 2) * scale;
+      normals[o] = nx; normals[o + 1] = ny; normals[o + 2] = nz;
+      colors[o] = r; colors[o + 1] = g; colors[o + 2] = b;
+    }
+  }
+  const spanX = (maxX - minX) * scale, spanY = (maxY - minY) * scale, spanZ = (maxZ - minZ) * scale;
+  const footprint = Math.max(1, Math.ceil(spanX - 1e-9), Math.ceil(spanZ - 1e-9));
+  const height = Math.max(1, Math.ceil(spanY - 1e-9));
+  const indices = new Uint16Array(tris * 3);
+  for (let i = 0; i < indices.length; i++) indices[i] = i;
+  if (indices.length > 65535) throw new Error(`${name}: too many vertices for Uint16`);
+  return { name, icon, positions, normals, colors, indices, footprint, height };
 }

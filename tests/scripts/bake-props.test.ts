@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { deflateSync } from 'node:zlib';
-import { parseGlb, decodePngRgba } from '../../scripts/bake-props';
+import { parseGlb, decodePngRgba, bakeModel, type RgbaImage } from '../../scripts/bake-props';
 
 // ---- 合成 GLB fixture（真实 kit 布局：单 node/单 mesh/单 primitive/mode 4）----
 function concatU8(parts: Uint8Array[]): Uint8Array {
@@ -115,5 +115,43 @@ describe('decodePngRgba', () => {
   });
   it('rejects non-RGBA PNGs', () => {
     expect(() => decodePngRgba(buildPng(2, 1, [Uint8Array.from([0, 1, 2, 3, 4, 5, 6, 7])], 2))).toThrow(/unsupported PNG/i);
+  });
+});
+
+describe('bakeModel', () => {
+  const TEX: RgbaImage = {
+    width: 2, height: 2,
+    rgba: Uint8Array.from([255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255]),
+  };
+  // UV 面中心 = (0.8, 0.2) → 最近纹素 (px=1, py=0) = 绿色
+  const TRI_RAW = {
+    positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 0, 1]),
+    uvs: new Float32Array([0.8, 0.1, 0.9, 0.2, 0.7, 0.3]),
+    indices: new Uint32Array([0, 1, 2]),
+  };
+
+  it('de-indexes per face with flat normals and centroid-sampled colors', () => {
+    const m = bakeModel('t', 'data:image/png;base64,AAA', TRI_RAW, TEX, 0.5);
+    expect(Array.from(m.positions)).toEqual([-0.25, 0, -0.25, 0.25, 0, -0.25, -0.25, 0, 0.25]);
+    expect(Array.from(m.normals)).toEqual([0, -1, 0, 0, -1, 0, 0, -1, 0]);
+    expect(Array.from(m.colors)).toEqual([0, 1, 0, 0, 1, 0, 0, 1, 0]);
+    expect(Array.from(m.indices)).toEqual([0, 1, 2]);
+    expect(m.footprint).toBe(1);
+    expect(m.height).toBe(1);
+  });
+
+  it('derives footprint/height from the scaled bbox', () => {
+    // 1×1×1 立方体（12 三角形），size 1.9 → 占地 1.9 格 → footprint 2、height 2
+    const verts: number[] = [];
+    for (const x of [-0.5, 0.5]) for (const y of [-0.5, 0.5]) for (const z of [-0.5, 0.5]) verts.push(x, y, z);
+    const cube = {
+      positions: new Float32Array(verts),
+      uvs: new Float32Array(new Array(8 * 2).fill(0.8)),
+      indices: new Uint32Array([0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7, 0, 1, 5, 0, 5, 4, 2, 3, 7, 2, 6, 7, 0, 4, 7, 0, 7, 3, 1, 5, 6, 1, 6, 2]),
+    };
+    const m = bakeModel('p', '', cube, TEX, 1.9);
+    expect(m.footprint).toBe(2);
+    expect(m.height).toBe(2);
+    expect(m.positions.length).toBe(36 * 3); // 8 共享顶点 → 拆解后 12 面 × 3
   });
 });
