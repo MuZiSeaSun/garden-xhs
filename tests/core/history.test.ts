@@ -25,4 +25,13 @@ describe('history', () => {
     h.clear();
     expect(h.size()).toBe(0);
   });
+  it('stores prop actions in the same LIFO stack', () => {
+    const h = createHistory();
+    h.push({ type: 'setProp', x: 1, y: 0, z: 0, prevModelId: null });
+    h.push({ type: 'batchProp', ops: [{ x: 2, y: 0, z: 0, prevModelId: 3 }] });
+    const b = h.pop();
+    expect(b && b.type === 'batchProp' ? b.ops[0].x : undefined).toBe(2);
+    const a = h.pop();
+    expect(a && a.type === 'setProp' ? a.prevModelId : undefined).toBeNull();
+  });
 });

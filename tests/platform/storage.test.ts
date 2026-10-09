@@ -49,3 +49,52 @@ describe('storage', () => {
     expect(await loadWorld()).toBeNull();
   });
 });
+
+describe('storage v2', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    delete (window as unknown as { xhs?: unknown }).xhs;
+  });
+  it('round-trips a v2 payload with props', async () => {
+    mockMiniTool(9462004);
+    const p = {
+      v: 2 as const,
+      blocks: new Array(1000).fill(0),
+      props: [{ x: 3, y: 0, z: 5, modelId: 7 }],
+      camera: { theta: 0.5, phi: 1, radius: 20 },
+    };
+    expect(await saveWorld(p)).toBe(true);
+    expect(await loadWorld()).toEqual(p);
+  });
+
+  it('accepts a legacy v1 payload (no props field)', async () => {
+    localStorage.setItem('garden_world_v1', JSON.stringify({
+      v: 1, blocks: new Array(1000).fill(1), camera: { theta: 0, phi: 1, radius: 20 },
+    }));
+    const loaded = await loadWorld();
+    expect(loaded?.v).toBe(1);
+  });
+
+  it('rejects v2 props with out-of-bounds coords', async () => {
+    localStorage.setItem('garden_world_v1', JSON.stringify({
+      v: 2, blocks: new Array(1000).fill(0), props: [{ x: 10, y: 0, z: 0, modelId: 0 }],
+      camera: { theta: 0, phi: 1, radius: 20 },
+    }));
+    expect(await loadWorld()).toBeNull();
+  });
+
+  it('rejects v2 props with a negative modelId', async () => {
+    localStorage.setItem('garden_world_v1', JSON.stringify({
+      v: 2, blocks: new Array(1000).fill(0), props: [{ x: 0, y: 0, z: 0, modelId: -1 }],
+      camera: { theta: 0, phi: 1, radius: 20 },
+    }));
+    expect(await loadWorld()).toBeNull();
+  });
+
+  it('rejects v2 without a props array', async () => {
+    localStorage.setItem('garden_world_v1', JSON.stringify({
+      v: 2, blocks: new Array(1000).fill(0), camera: { theta: 0, phi: 1, radius: 20 },
+    }));
+    expect(await loadWorld()).toBeNull();
+  });
+});

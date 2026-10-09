@@ -18,7 +18,20 @@ export interface BatchAction {
   }>;
 }
 
-export type HistoryAction = SetAction | BatchAction;
+export interface SetPropAction {
+  readonly type: 'setProp';
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+  readonly prevModelId: number | null; // null = 该格原本无道具（撤销 = 移除）
+}
+
+export interface BatchPropAction {
+  readonly type: 'batchProp';
+  readonly ops: ReadonlyArray<{ readonly x: number; readonly y: number; readonly z: number; readonly prevModelId: number | null }>;
+}
+
+export type HistoryAction = SetAction | BatchAction | SetPropAction | BatchPropAction;
 
 const MAX_HISTORY = 20;
 
