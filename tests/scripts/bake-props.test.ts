@@ -38,6 +38,10 @@ function buildGlb(o: {
     ],
     buffers: [{ byteLength: bin.byteLength }],
   };
+  return wrapGlb(json, bin);
+}
+
+function wrapGlb(json: unknown, bin: Uint8Array): Uint8Array {
   const jsonBytes = new TextEncoder().encode(JSON.stringify(json));
   const total = 12 + 8 + jsonBytes.length + 8 + bin.length;
   const out = new Uint8Array(total);
@@ -49,6 +53,54 @@ function buildGlb(o: {
   dv.setUint32(bo, bin.length, true); dv.setUint32(bo + 4, 0x004e4942, true);
   out.set(bin, bo + 8);
   return out;
+}
+
+/** 多节点场景（弹簧这类：父节点 translation 累加到子 mesh POSITION） */
+function buildSceneGlb(o: {
+  meshes: Array<{ positions: number[]; uvs: number[]; indices: number[] }>;
+  nodes: Array<{
+    mesh?: number;
+    children?: number[];
+    translation?: number[];
+    rotation?: number[];
+    scale?: number[];
+  }>;
+}): Uint8Array {
+  const parts: Uint8Array[] = [];
+  const accessors: unknown[] = [];
+  const bufferViews: unknown[] = [];
+  const meshes: unknown[] = [];
+  let offset = 0;
+  for (const mesh of o.meshes) {
+    const pos = new Float32Array(mesh.positions);
+    const uv = new Float32Array(mesh.uvs);
+    const idx = new Uint16Array(mesh.indices);
+    const posBv = bufferViews.length;
+    bufferViews.push({ buffer: 0, byteOffset: offset, byteLength: pos.byteLength });
+    parts.push(new Uint8Array(pos.buffer));
+    offset += pos.byteLength;
+    const uvBv = bufferViews.length;
+    bufferViews.push({ buffer: 0, byteOffset: offset, byteLength: uv.byteLength });
+    parts.push(new Uint8Array(uv.buffer));
+    offset += uv.byteLength;
+    const idxBv = bufferViews.length;
+    bufferViews.push({ buffer: 0, byteOffset: offset, byteLength: idx.byteLength });
+    parts.push(new Uint8Array(idx.buffer));
+    offset += idx.byteLength;
+    const posA = accessors.length;
+    accessors.push({ bufferView: posBv, componentType: 5126, count: pos.length / 3, type: 'VEC3' });
+    const uvA = accessors.length;
+    accessors.push({ bufferView: uvBv, componentType: 5126, count: uv.length / 2, type: 'VEC2' });
+    const idxA = accessors.length;
+    accessors.push({ bufferView: idxBv, componentType: 5123, count: idx.length, type: 'SCALAR' });
+    meshes.push({ primitives: [{ attributes: { POSITION: posA, TEXCOORD_0: uvA }, indices: idxA, mode: 4 }] });
+  }
+  const bin = concatU8(parts);
+  return wrapGlb({
+    scene: 0, scenes: [{ nodes: [0] }],
+    nodes: o.nodes, meshes, accessors, bufferViews,
+    buffers: [{ byteLength: bin.byteLength }],
+  }, bin);
 }
 
 const TRI = {
@@ -97,6 +149,31 @@ describe('parseGlb', () => {
   });
   it('rejects node TRS transforms', () => {
     expect(() => parseGlb(buildGlb({ ...TRI, nodeScale: [2, 2, 2] }))).toThrow(/TRS/i);
+  });
+
+  it('writes child translation into POSITION, accumulates parent offset, and still rejects rotation', () => {
+    const childOnly = parseGlb(buildSceneGlb({
+      meshes: [TRI],
+      nodes: [{ children: [1] }, { mesh: 0, translation: [2, 3, 4] }],
+    }));
+    expect(Array.from(childOnly.positions)).toEqual([2, 3, 4, 3, 3, 4, 2, 3, 5]);
+
+    const accumulated = parseGlb(buildSceneGlb({
+      meshes: [TRI, TRI],
+      nodes: [
+        { mesh: 0, children: [1], translation: [1, 0, 0] },
+        { mesh: 1, translation: [0, 2, 0] },
+      ],
+    }));
+    expect(Array.from(accumulated.positions)).toEqual([
+      1, 0, 0, 2, 0, 0, 1, 0, 1,
+      1, 2, 0, 2, 2, 0, 1, 2, 1,
+    ]);
+
+    expect(() => parseGlb(buildSceneGlb({
+      meshes: [TRI],
+      nodes: [{ mesh: 0, rotation: [0, 0, 0, 1] }],
+    }))).toThrow(/TRS/i);
   });
 });
 
