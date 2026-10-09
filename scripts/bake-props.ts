@@ -1,6 +1,7 @@
 // 构建期烘焙脚本：纯 Node、零新增依赖；不进入产物。
 // 运行：npm run bake:props（Node ≥22.6 原生剥离 .ts 类型）
 import { inflateSync } from 'node:zlib';
+import { readFileSync, writeFileSync, statSync } from 'node:fs';
 import type { PropModelData } from '../src/core/prop-types';
 
 export interface RawGltfMesh {
@@ -73,23 +74,32 @@ export function parseGlb(bytes: Uint8Array): RawGltfMesh {
   const sceneIdx = json.scene ?? 0;
   const rootNodes = json.scenes?.[sceneIdx]?.nodes;
   if (!rootNodes || rootNodes.length === 0) throw new Error('empty scene');
-  const meshIds: number[] = [];
-  const walk = (ni: number): void => {
+  const meshIds: { id: number; tx: number; ty: number; tz: number }[] = [];
+  const walk = (ni: number, ptx: number, pty: number, ptz: number): void => {
     const n = json.nodes?.[ni];
     if (!n) throw new Error(`missing node ${ni}`);
-    if (n.translation !== undefined || n.rotation !== undefined || n.scale !== undefined) {
+    // 旋转/缩放仍拒绝（Task 1 测试）；弹簧等组合件只有 translation，烘焙进顶点
+    if (n.rotation !== undefined || n.scale !== undefined) {
       throw new Error('node TRS transforms unsupported');
     }
-    if (n.mesh !== undefined) meshIds.push(n.mesh);
-    for (const c of n.children ?? []) walk(c);
+    let tx = ptx, ty = pty, tz = ptz;
+    const t = n.translation;
+    if (t !== undefined) {
+      if (!Array.isArray(t) || t.length !== 3 || t.some((v) => typeof v !== 'number')) {
+        throw new Error('node TRS transforms unsupported');
+      }
+      tx += t[0]; ty += t[1]; tz += t[2];
+    }
+    if (n.mesh !== undefined) meshIds.push({ id: n.mesh, tx, ty, tz });
+    for (const c of n.children ?? []) walk(c, tx, ty, tz);
   };
-  for (const ni of rootNodes) walk(ni);
+  for (const ni of rootNodes) walk(ni, 0, 0, 0);
   if (meshIds.length === 0) throw new Error('scene has no meshes');
 
   const posOut: number[] = [];
   const uvOut: number[] = [];
   const idxOut: number[] = [];
-  for (const mi of meshIds) {
+  for (const { id: mi, tx, ty, tz } of meshIds) {
     const mesh = json.meshes?.[mi];
     if (!mesh) throw new Error(`missing mesh ${mi}`);
     for (const prim of mesh.primitives) {
@@ -104,7 +114,11 @@ export function parseGlb(bytes: Uint8Array): RawGltfMesh {
       const base = posOut.length / 3;
       for (let i = 0; i < pos.count; i++) {
         const po = pos.byteOffset + i * pos.stride;
-        posOut.push(pos.dv.getFloat32(po, true), pos.dv.getFloat32(po + 4, true), pos.dv.getFloat32(po + 8, true));
+        posOut.push(
+          pos.dv.getFloat32(po, true) + tx,
+          pos.dv.getFloat32(po + 4, true) + ty,
+          pos.dv.getFloat32(po + 8, true) + tz,
+        );
         const uo = uv.byteOffset + i * uv.stride;
         uvOut.push(uv.dv.getFloat32(uo, true), uv.dv.getFloat32(uo + 4, true));
       }
@@ -250,3 +264,81 @@ export function bakeModel(
   if (indices.length > 65535) throw new Error(`${name}: too many vertices for Uint16`);
   return { name, icon, positions, normals, colors, indices, footprint, height };
 }
+
+// ---- 模型清单（spec §12.1 已核实 12 个；size = 目标水平最大边，格）----
+const KIT = 'D:/Documents/lzx/assets/platformer-kit';
+const SPECS: ReadonlyArray<{ file: string; name: string; size: number }> = [
+  { file: 'tree', name: '小树', size: 0.92 },
+  { file: 'crate', name: '木箱', size: 0.92 },
+  { file: 'barrel', name: '木桶', size: 0.85 },
+  { file: 'mushrooms', name: '蘑菇', size: 0.9 },
+  { file: 'rocks', name: '石头', size: 0.9 },
+  { file: 'plant', name: '盆栽', size: 0.9 },
+  { file: 'fence-straight', name: '栅栏', size: 0.98 },
+  { file: 'sign', name: '木牌', size: 0.75 },
+  { file: 'flag', name: '旗帜', size: 0.9 },
+  { file: 'coin-gold', name: '金币', size: 0.5 },
+  { file: 'spring', name: '弹簧', size: 0.85 },
+  { file: 'platform', name: '平台', size: 1.9 },
+];
+
+export function assertPng64(bytes: Uint8Array, label: string): void {
+  const sig = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  for (let i = 0; i < 8; i++) if (bytes[i] !== sig[i]) throw new Error(`${label}: not a PNG`);
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (dv.getUint32(16) !== 64 || dv.getUint32(20) !== 64) throw new Error(`${label}: preview not 64x64`);
+}
+
+export function serializeModels(models: readonly BakedModel[]): string {
+  const b64 = (a: Float32Array | Uint16Array): string =>
+    Buffer.from(a.buffer, a.byteOffset, a.byteLength).toString('base64');
+  const entries = models.map((m) =>
+    `  {\n    name: ${JSON.stringify(m.name)},\n    icon: ${JSON.stringify(m.icon)},\n` +
+    `    positions: f32(${JSON.stringify(b64(m.positions))}),\n` +
+    `    normals: f32(${JSON.stringify(b64(m.normals))}),\n` +
+    `    colors: f32(${JSON.stringify(b64(m.colors))}),\n` +
+    `    indices: u16(${JSON.stringify(b64(m.indices))}),\n` +
+    `    footprint: ${m.footprint},\n    height: ${m.height},\n  },`,
+  ).join('\n');
+  return `// 由 scripts/bake-props.ts 生成——勿手改；重跑：npm run bake:props
+import type { PropModelData } from '../core/prop-types';
+
+function b64ToU8(s: string): Uint8Array {
+  const bin = atob(s);
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return u8;
+}
+function f32(s: string): Float32Array {
+  const u8 = b64ToU8(s);
+  return new Float32Array(u8.buffer, u8.byteOffset, u8.length >> 2);
+}
+function u16(s: string): Uint16Array {
+  const u8 = b64ToU8(s);
+  return new Uint16Array(u8.buffer, u8.byteOffset, u8.length >> 1);
+}
+
+export const PROP_MODELS: readonly PropModelData[] = [
+${entries}
+];
+`;
+}
+
+function main(): void {
+  const tex = decodePngRgba(readFileSync(`${KIT}/Models/GLB format/Textures/colormap.png`));
+  const models: BakedModel[] = [];
+  for (const s of SPECS) {
+    const raw = parseGlb(readFileSync(`${KIT}/Models/GLB format/${s.file}.glb`));
+    const iconBytes = readFileSync(`${KIT}/Previews/${s.file}.png`);
+    assertPng64(iconBytes, s.file);
+    const icon = 'data:image/png;base64,' + iconBytes.toString('base64');
+    const m = bakeModel(s.name, icon, raw, tex, s.size);
+    models.push(m);
+    console.log(`${s.file}: tris=${raw.indices.length / 3} footprint=${m.footprint} height=${m.height}`);
+  }
+  writeFileSync('src/assets/props.generated.ts', serializeModels(models));
+  console.log(`props.generated.ts ${Math.round(statSync('src/assets/props.generated.ts').size / 1024)}KB`);
+}
+
+if (process.argv[1] && process.argv[1].replace(/\\/g, '/').endsWith('/scripts/bake-props.ts')) main();
+
