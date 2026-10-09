@@ -11,12 +11,13 @@ export interface VoxelHit {
   readonly distance: number;
 }
 
-export function voxelRaycast(
+/** 逐步 DDA：沿射线逐格步进（首格法线为 0,0,0）；visit 返回 true 即停止。返回是否命中。 */
+export function walkRay(
   origin: readonly [number, number, number],
   direction: readonly [number, number, number],
-  world: World,
   maxDistance: number,
-): VoxelHit | null {
+  visit: (x: number, y: number, z: number, nx: number, ny: number, nz: number, t: number) => boolean,
+): boolean {
   let x = Math.floor(origin[0]);
   let y = Math.floor(origin[1]);
   let z = Math.floor(origin[2]);
@@ -41,9 +42,7 @@ export function voxelRaycast(
   let t = 0;
 
   while (t < maxDistance) {
-    if (world.getBlock(x, y, z) !== BLOCK.AIR) {
-      return { x, y, z, nx, ny, nz, distance: t };
-    }
+    if (visit(x, y, z, nx, ny, nz, t)) return true;
 
     if (tMaxX < tMaxY && tMaxX < tMaxZ) {
       x += stepX; t = tMaxX; tMaxX += tDeltaX;
@@ -56,5 +55,22 @@ export function voxelRaycast(
       nx = 0; ny = 0; nz = -stepZ;
     }
   }
-  return null;
+  return false;
+}
+
+export function voxelRaycast(
+  origin: readonly [number, number, number],
+  direction: readonly [number, number, number],
+  world: World,
+  maxDistance: number,
+): VoxelHit | null {
+  let hit: VoxelHit | null = null;
+  walkRay(origin, direction, maxDistance, (x, y, z, nx, ny, nz, t) => {
+    if (world.getBlock(x, y, z) !== BLOCK.AIR) {
+      hit = { x, y, z, nx, ny, nz, distance: t };
+      return true;
+    }
+    return false;
+  });
+  return hit;
 }
