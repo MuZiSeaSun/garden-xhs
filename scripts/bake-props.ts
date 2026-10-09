@@ -1,9 +1,6 @@
 // 构建期烘焙脚本：纯 Node、零新增依赖；不进入产物。
 // 运行：npm run bake:props（Node ≥22.6 原生剥离 .ts 类型）
-import { readFileSync } from 'node:fs';
 import { inflateSync } from 'node:zlib';
-
-export { readFileSync };
 
 export interface RawGltfMesh {
   readonly positions: Float32Array; // 3/顶点
@@ -172,7 +169,7 @@ export function decodePngRgba(bytes: Uint8Array): RgbaImage {
       const ul = y > 0 && x >= 4 ? out[i - stride - 4] : 0;
       switch (filter) {
         case 0: out[i] = v; break;
-        case 1: out[i] = v + (x % 4 !== 0 ? out[i - 1] : 0); break;
+        case 1: out[i] = v + left; break;
         case 2: out[i] = v + up; break;
         case 3: out[i] = v + ((left + up) >> 1); break;
         case 4: {

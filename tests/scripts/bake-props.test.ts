@@ -109,7 +109,7 @@ describe('decodePngRgba', () => {
   });
   it('decodes filter-1 (Sub) rows', () => {
     const orig = [10, 20, 30, 255, 50, 20, 30, 255];
-    const sub = orig.map((v, i) => (i % 4 === 0 ? v : (v - orig[i - 1] + 256) % 256));
+    const sub = orig.map((v, i) => (v - (i >= 4 ? orig[i - 4] : 0) + 256) % 256);
     const img = decodePngRgba(buildPng(2, 1, [Uint8Array.from([1, ...sub])]));
     expect(Array.from(img.rgba)).toEqual(orig);
   });
