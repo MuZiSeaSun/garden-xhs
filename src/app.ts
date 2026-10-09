@@ -16,11 +16,14 @@ import { saveToAlbum, shareAsNote } from './platform/share';
 import { bindGestures } from './input/gesture';
 import { bindUI, type EditorMode } from './ui';
 import { PROP_MODELS } from './assets/props.generated';
-import { voxelRaycast } from './core/voxel-raycast';
+import { createPropWorld } from './core/prop-world';
+import { pick, type PickHit } from './core/pick';
+import { propTriangleCount } from './core/prop-mesh-builder';
 import { createHistory } from './core/history';
 import { PRESETS } from './core/presets';
 import { BLOCK, type BlockId } from './core/block-types';
 import type { RendererAdapter, BlockDelta } from './rendering/renderer-api';
+import type { SavePayload } from './platform/storage';
 
 async function bootstrap(): Promise<void> {
   const initialCanvas = document.getElementById('scene') as HTMLCanvasElement | null;
@@ -32,6 +35,8 @@ async function bootstrap(): Promise<void> {
   const world = createWorld();
   const camera = createCameraOrbit();
   const history = createHistory();
+  const propWorld = createPropWorld(PROP_MODELS);
+  const PROP_TRIANGLE_BUDGET = 90_000;
   let exposure = 1.3;
   let temperature = 5000;
 
@@ -59,6 +64,7 @@ async function bootstrap(): Promise<void> {
   renderer.resize(canvas.clientWidth, canvas.clientHeight, window.devicePixelRatio || 1);
   renderer.syncWorld(world.snapshot());
   renderer.setCamera(toRendererCameraState(camera));
+  renderer.definePropModels?.(PROP_MODELS);
 
   // 恢复存档（存在时覆盖地面与相机，再重渲染一次）
   const saved = await loadWorld();
@@ -67,27 +73,33 @@ async function bootstrap(): Promise<void> {
     camera.theta = saved.camera.theta;
     camera.phi = saved.camera.phi;
     camera.radius = saved.camera.radius;
+    if (saved.v === 2) {
+      for (const p of saved.props) propWorld.add(p.x, p.y, p.z, p.modelId); // 非法项 add 返回 null，自动跳过
+    }
     renderer.syncWorld(world.snapshot());
     renderer.setCamera(toRendererCameraState(camera));
   }
+  renderer.syncProps?.(propWorld.list());
 
   // 状态
   let mode: EditorMode = 'orbit';
   let currentBlockType: BlockId = BLOCK.GRASS;
   let currentPreset: string | null = null;
+  let currentPropModelId: number | null = null;
   let userZoomed = false;
 
   // 自动保存（debounce）
+  const buildSavePayload = (): SavePayload => ({
+    v: 2,
+    blocks: Array.from(world.blocks),
+    props: propWorld.list().map((p) => ({ x: p.x, y: p.y, z: p.z, modelId: p.modelId })),
+    camera: { theta: camera.theta, phi: camera.phi, radius: camera.radius },
+  });
+
   let saveTimer = 0;
   const scheduleSave = (): void => {
     clearTimeout(saveTimer);
-    saveTimer = window.setTimeout(() => {
-      void saveWorld({
-        v: 1,
-        blocks: Array.from(world.blocks),
-        camera: { theta: camera.theta, phi: camera.phi, radius: camera.radius },
-      });
-    }, 500);
+    saveTimer = window.setTimeout(() => { void saveWorld(buildSavePayload()); }, 500);
   };
 
   // 单个方块修改
@@ -96,24 +108,59 @@ async function bootstrap(): Promise<void> {
     scheduleSave();
   };
 
+  const placeProp = (hit: PickHit | null): void => {
+    if (!hit || currentPropModelId === null) return;
+    const model = PROP_MODELS[currentPropModelId];
+    if (!model) return;
+    const tx = hit.x + hit.nx, ty = hit.y + hit.ny, tz = hit.z + hit.nz;
+    // 占用列全部格须为空气（不得插入地形）；边界与道具重叠由 propWorld.add 校验
+    for (let dx = 0; dx < model.footprint; dx++) {
+      for (let dy = 0; dy < model.height; dy++) {
+        for (let dz = 0; dz < model.footprint; dz++) {
+          if (world.getBlock(tx + dx, ty + dy, tz + dz) !== BLOCK.AIR) {
+            showToast('位置被方块占据');
+            return;
+          }
+        }
+      }
+    }
+    if (propTriangleCount(PROP_MODELS, propWorld.list()) + model.indices.length / 3 > PROP_TRIANGLE_BUDGET) {
+      showToast('道具太多，先删一些');
+      return;
+    }
+    const inst = propWorld.add(tx, ty, tz, currentPropModelId);
+    if (!inst) { showToast('位置被占用'); return; }
+    history.push({ type: 'setProp', x: tx, y: ty, z: tz, prevModelId: null });
+    renderer.applyPropDelta?.({ added: [inst], removed: [] });
+    scheduleSave();
+  };
+
+  const removeProp = (hit: PickHit): void => {
+    const inst = propWorld.removeAt(hit.x, hit.y, hit.z);
+    if (!inst) return;
+    history.push({ type: 'setProp', x: inst.x, y: inst.y, z: inst.z, prevModelId: inst.modelId });
+    renderer.applyPropDelta?.({
+      added: [],
+      removed: [{ x: inst.x, y: inst.y, z: inst.z, modelId: inst.modelId }],
+    });
+    scheduleSave();
+  };
+
   const handleTap = (x: number, y: number): void => {
     const ray = renderer.screenPointToRay(x, y);
-    // 相机（长焦）距离很远，射线要能走完整段距离才够到场地。
-    const hit = voxelRaycast(ray.origin, ray.direction, world, camera.radius * 2);
+    const hit = pick(ray.origin, ray.direction, world, propWorld, camera.radius * 2);
 
     if (mode === 'place') {
-      if (currentPreset) {
-        // 放置预设模型
+      if (currentPropModelId !== null) {
+        placeProp(hit);
+      } else if (currentPreset) {
         const preset = PRESETS[currentPreset];
-        if (!preset) return;
-        if (!hit) return;
+        if (!preset || !hit) return;
         const anchor = [hit.x + hit.nx, hit.y + hit.ny, hit.z + hit.nz] as const;
         const added: Array<{ x: number; y: number; z: number; type: BlockId }> = [];
         const ops: Array<{ x: number; y: number; z: number; prev: BlockId }> = [];
         for (const b of preset.blocks) {
-          const bx = anchor[0] + b.dx;
-          const by = anchor[1] + b.dy;
-          const bz = anchor[2] + b.dz;
+          const bx = anchor[0] + b.dx, by = anchor[1] + b.dy, bz = anchor[2] + b.dz;
           if (world.getBlock(bx, by, bz) !== BLOCK.AIR) continue;
           if (!world.setBlock(bx, by, bz, b.type as BlockId)) continue;
           ops.push({ x: bx, y: by, z: bz, prev: BLOCK.AIR });
@@ -124,16 +171,17 @@ async function bootstrap(): Promise<void> {
           applyDelta({ added, removed: [] });
         }
       } else if (hit) {
-        const tx = hit.x + hit.nx;
-        const ty = hit.y + hit.ny;
-        const tz = hit.z + hit.nz;
+        // 命中 prop 或 block 一视同仁：目标格 = 命中格 + 法线
+        const tx = hit.x + hit.nx, ty = hit.y + hit.ny, tz = hit.z + hit.nz;
         if (world.getBlock(tx, ty, tz) === BLOCK.AIR && world.setBlock(tx, ty, tz, currentBlockType)) {
           history.push({ type: 'set', x: tx, y: ty, z: tz, prev: BLOCK.AIR });
           applyDelta({ added: [{ x: tx, y: ty, z: tz, type: currentBlockType }], removed: [] });
         }
       }
     } else if (mode === 'remove') {
-      if (hit) {
+      if (hit && hit.kind === 'prop') {
+        removeProp(hit);
+      } else if (hit && hit.kind === 'block') {
         const prev = world.getBlock(hit.x, hit.y, hit.z);
         if (prev !== BLOCK.AIR && world.setBlock(hit.x, hit.y, hit.z, BLOCK.AIR)) {
           history.push({ type: 'set', x: hit.x, y: hit.y, z: hit.z, prev });
@@ -159,24 +207,48 @@ async function bootstrap(): Promise<void> {
   let disposeGestures = bindGestures(canvas, gestureHandlers);
 
   // UI
+  const undoPropCell = (x: number, y: number, z: number, prevModelId: number | null): void => {
+    if (prevModelId === null) {
+      const inst = propWorld.removeAt(x, y, z); // 撤销一次放置 → 移除
+      if (inst) {
+        renderer.applyPropDelta?.({
+          added: [],
+          removed: [{ x: inst.x, y: inst.y, z: inst.z, modelId: inst.modelId }],
+        });
+      }
+    } else {
+      const inst = propWorld.add(x, y, z, prevModelId); // 撤销一次删除 → 放回
+      if (inst) renderer.applyPropDelta?.({ added: [inst], removed: [] });
+    }
+  };
+
   const undo = (): void => {
     const action = history.pop();
     if (!action) return;
     const added: Array<{ x: number; y: number; z: number; type: BlockId }> = [];
     const removed: Array<{ x: number; y: number; z: number }> = [];
 
-    if (action.type === 'set') {
-      world.setBlock(action.x, action.y, action.z, action.prev);
-      if (action.prev === BLOCK.AIR) removed.push({ x: action.x, y: action.y, z: action.z });
-      else added.push({ x: action.x, y: action.y, z: action.z, type: action.prev });
-    } else if (action.type === 'batch') {
-      for (const op of action.ops) {
-        world.setBlock(op.x, op.y, op.z, op.prev);
-        if (op.prev === BLOCK.AIR) removed.push({ x: op.x, y: op.y, z: op.z });
-        else added.push({ x: op.x, y: op.y, z: op.z, type: op.prev });
+    if (action.type === 'set' || action.type === 'batch') {
+      // ——原体素撤销逻辑逐字保留——
+      if (action.type === 'set') {
+        world.setBlock(action.x, action.y, action.z, action.prev);
+        if (action.prev === BLOCK.AIR) removed.push({ x: action.x, y: action.y, z: action.z });
+        else added.push({ x: action.x, y: action.y, z: action.z, type: action.prev });
+      } else {
+        for (const op of action.ops) {
+          world.setBlock(op.x, op.y, op.z, op.prev);
+          if (op.prev === BLOCK.AIR) removed.push({ x: op.x, y: op.y, z: op.z });
+          else added.push({ x: op.x, y: op.y, z: op.z, type: op.prev });
+        }
       }
+      applyDelta({ added, removed });
+    } else if (action.type === 'setProp') {
+      undoPropCell(action.x, action.y, action.z, action.prevModelId);
+      scheduleSave();
+    } else {
+      for (const op of action.ops) undoPropCell(op.x, op.y, op.z, op.prevModelId);
+      scheduleSave();
     }
-    applyDelta({ added, removed });
   };
 
   const toast = document.getElementById('toast');
@@ -219,15 +291,17 @@ async function bootstrap(): Promise<void> {
       next.setTheme({ exposure, temperature });
     next.resize(canvas.clientWidth, canvas.clientHeight, window.devicePixelRatio || 1);
     next.syncWorld(world.snapshot());
+    next.definePropModels?.(PROP_MODELS);
+    next.syncProps?.(propWorld.list());
     next.setCamera(toRendererCameraState(camera));
     showToast(`适配器：${next.name}`);
   };
 
   bindUI({
     onModeChange: (m) => { mode = m; },
-    onBlockSelect: (t) => { currentBlockType = t as BlockId; currentPreset = null; },
-    onPresetSelect: (key) => { currentPreset = key; },
-    onPropSelect: (_modelId: number): void => {},
+    onBlockSelect: (t) => { currentBlockType = t as BlockId; currentPreset = null; currentPropModelId = null; },
+    onPresetSelect: (key) => { currentPreset = key; currentPropModelId = null; },
+    onPropSelect: (modelId) => { currentPropModelId = modelId; currentPreset = null; },
     onUndo: undo,
     onPerspectiveChange: (distance) => {
       setDistance(camera, distance);
@@ -248,7 +322,9 @@ async function bootstrap(): Promise<void> {
       world.clear();
       seedGround(world);
       history.clear();
+      propWorld.clear();
       renderer.syncWorld(world.snapshot());
+      renderer.syncProps?.([]);
       scheduleSave();
     },
     onSaveAlbum: () => {
@@ -282,11 +358,7 @@ async function bootstrap(): Promise<void> {
   // 页面隐藏时立即保存
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') {
-      void saveWorld({
-        v: 1,
-        blocks: Array.from(world.blocks),
-        camera: { theta: camera.theta, phi: camera.phi, radius: camera.radius },
-      });
+      void saveWorld(buildSavePayload());
     }
   });
 }
