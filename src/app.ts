@@ -168,7 +168,7 @@ async function bootstrap(): Promise<void> {
       world.setBlock(action.x, action.y, action.z, action.prev);
       if (action.prev === BLOCK.AIR) removed.push({ x: action.x, y: action.y, z: action.z });
       else added.push({ x: action.x, y: action.y, z: action.z, type: action.prev });
-    } else {
+    } else if (action.type === 'batch') {
       for (const op of action.ops) {
         world.setBlock(op.x, op.y, op.z, op.prev);
         if (op.prev === BLOCK.AIR) removed.push({ x: op.x, y: op.y, z: op.z });
