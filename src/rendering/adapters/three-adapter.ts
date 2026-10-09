@@ -12,6 +12,9 @@ import {
 } from '../renderer-api';
 import { buildVoxelMesh } from '../../core/mesh-builder';
 import { kelvinToRgb, kelvinBackgroundFactor } from '../color-temperature';
+import type { PropInstance, PropModelData } from '../../core/prop-types';
+import type { PropDelta } from '../renderer-api';
+import { buildPropBatch } from '../../core/prop-mesh-builder';
 
 export interface AtlasTextureLike {
   magFilter: number;
@@ -60,6 +63,10 @@ export class ThreeAdapter implements RendererAdapter {
   private rafId = 0;
   private disposed = false;
   private lastSnapshot: WorldSnapshot | null = null;
+  private propMaterial!: THREE.MeshLambertMaterial;
+  private propMeshes = new Map<number, THREE.Mesh>();          // modelId → 批 Mesh
+  private propInstByModel = new Map<number, PropInstance[]>(); // modelId → 实例列表
+  private propModels: readonly PropModelData[] = [];
 
   isSupported(caps: Capabilities): boolean {
     return caps.webgl;
@@ -116,6 +123,8 @@ export class ThreeAdapter implements RendererAdapter {
     this.scene.add(this.sun);
     this.scene.add(this.sun.target);
 
+    this.propMaterial = new THREE.MeshLambertMaterial({ vertexColors: true });
+
     canvas.addEventListener('webglcontextlost', this.onContextLost);
     canvas.addEventListener('webglcontextrestored', this.onContextRestored);
   }
@@ -129,6 +138,12 @@ export class ThreeAdapter implements RendererAdapter {
     this.geometry?.dispose();
     this.material?.dispose();
     this.texture?.dispose();
+    for (const mesh of this.propMeshes.values()) {
+      this.scene?.remove(mesh);
+      mesh.geometry.dispose();
+    }
+    this.propMeshes.clear();
+    this.propMaterial?.dispose();
     this.renderer?.dispose();
   }
 
@@ -179,6 +194,71 @@ export class ThreeAdapter implements RendererAdapter {
 
     this.rebuildGeometry(this.lastSnapshot);
     this.requestRender();
+  }
+
+  definePropModels(models: readonly PropModelData[]): void {
+    this.propModels = models;
+  }
+
+  syncProps(instances: readonly PropInstance[]): void {
+    if (!this.scene) return; // init 前安全 no-op
+    this.propInstByModel = new Map();
+    for (const p of instances) {
+      const list = this.propInstByModel.get(p.modelId);
+      if (list) list.push(p);
+      else this.propInstByModel.set(p.modelId, [p]);
+    }
+    for (const mesh of this.propMeshes.values()) {
+      this.scene.remove(mesh);
+      mesh.geometry.dispose();
+    }
+    this.propMeshes.clear();
+    for (const id of this.propInstByModel.keys()) this.rebuildPropBatch(id);
+    this.requestRender();
+  }
+
+  applyPropDelta(delta: PropDelta): void {
+    if (!this.scene) return;
+    const affected = new Set<number>();
+    for (const p of delta.added) {
+      const list = this.propInstByModel.get(p.modelId);
+      if (list) list.push(p);
+      else this.propInstByModel.set(p.modelId, [p]);
+      affected.add(p.modelId);
+    }
+    for (const r of delta.removed) {
+      const list = this.propInstByModel.get(r.modelId);
+      if (list) {
+        const i = list.findIndex((q) => q.x === r.x && q.y === r.y && q.z === r.z);
+        if (i >= 0) list.splice(i, 1);
+        affected.add(r.modelId);
+      }
+    }
+    for (const id of affected) this.rebuildPropBatch(id);
+    this.requestRender();
+  }
+
+  private rebuildPropBatch(modelId: number): void {
+    const old = this.propMeshes.get(modelId);
+    if (old) {
+      this.scene.remove(old);
+      old.geometry.dispose();
+      this.propMeshes.delete(modelId);
+    }
+    const insts = this.propInstByModel.get(modelId) ?? [];
+    if (insts.length === 0) return;
+    const batch = buildPropBatch(this.propModels, insts, modelId);
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(batch.positions, 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(batch.normals, 3));
+    g.setAttribute('color', new THREE.BufferAttribute(batch.colors, 3));
+    g.setIndex(new THREE.BufferAttribute(batch.indices, 1)); // Uint32Array → three 自动启用 OES_element_index_uint
+    g.computeBoundingSphere();
+    const mesh = new THREE.Mesh(g, this.propMaterial);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    this.scene.add(mesh);
+    this.propMeshes.set(modelId, mesh);
   }
 
   private rebuildGeometry(snapshot: WorldSnapshot): void {
