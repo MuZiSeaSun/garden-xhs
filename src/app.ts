@@ -162,6 +162,7 @@ async function bootstrap(): Promise<void> {
         for (const b of preset.blocks) {
           const bx = anchor[0] + b.dx, by = anchor[1] + b.dy, bz = anchor[2] + b.dz;
           if (world.getBlock(bx, by, bz) !== BLOCK.AIR) continue;
+          if (propWorld.propAt(bx, by, bz)) continue;
           if (!world.setBlock(bx, by, bz, b.type as BlockId)) continue;
           ops.push({ x: bx, y: by, z: bz, prev: BLOCK.AIR });
           added.push({ x: bx, y: by, z: bz, type: b.type as BlockId });
