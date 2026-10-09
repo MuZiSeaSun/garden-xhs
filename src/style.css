@@ -134,6 +134,7 @@ body {
 }
 #toast[hidden] { display: none; }
 .palette-group { display: flex; flex: 0 0 auto; }
+.palette-group > * + * { margin-left: 6px; }
 .palette > .palette-group + .palette-group {
   margin-left: 6px;
   padding-left: 8px;
