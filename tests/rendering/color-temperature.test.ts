@@ -1,29 +1,69 @@
 import { describe, it, expect } from 'vitest';
-import { kelvinToRgb, kelvinBackgroundFactor } from '../../src/rendering/color-temperature';
+import {
+  kelvinToRgb,
+  kelvinSunColor,
+  kelvinSkyColor,
+  kelvinGroundColor,
+  kelvinBackgroundFactor,
+  defaultKelvinAnchors,
+  paletteFromKelvin,
+} from '../../src/rendering/color-temperature';
 
-describe('kelvinToRgb', () => {
-  it('1500K is warm orange (r > g > b, and not red)', () => {
-    const [r, g, b] = kelvinToRgb(1500);
+const hex = (n: number): number => n / 255;
+
+describe('pastel kelvin palette', () => {
+  it('6500K matches the reference swatches', () => {
+    const sun = kelvinSunColor(6500);
+    const sky = kelvinSkyColor(6500);
+    const ground = kelvinGroundColor(6500);
+    expect(sun[0]).toBeCloseTo(1, 5);
+    expect(sun[1]).toBeCloseTo(hex(0xf8), 5);
+    expect(sun[2]).toBeCloseTo(hex(0xdc), 5);
+    expect(sky[0]).toBeCloseTo(hex(0xbb), 5);
+    expect(sky[1]).toBeCloseTo(hex(0xe0), 5);
+    expect(sky[2]).toBeCloseTo(1, 5);
+    expect(ground[0]).toBeCloseTo(hex(0x6b), 5);
+    expect(ground[1]).toBeCloseTo(hex(0x44), 5);
+    expect(ground[2]).toBeCloseTo(hex(0x23), 5);
+  });
+
+  it('1500K sun is warm orange, not red', () => {
+    const [r, g, b] = kelvinSunColor(1500);
     expect(r).toBeGreaterThan(g);
     expect(g).toBeGreaterThan(b);
-    expect(g).toBeGreaterThan(0.35); // green kept high enough to read orange, not red
+    expect(g).toBeGreaterThan(0.35);
     expect(b).toBeGreaterThan(0);
   });
-  it('20000K is clearly cool (b high, r well below neutral)', () => {
-    const [r, , b] = kelvinToRgb(20000);
+
+  it('20000K sun is cool', () => {
+    const [r, , b] = kelvinSunColor(20000);
     expect(b).toBeGreaterThan(r);
-    expect(b).toBeGreaterThanOrEqual(0.95);
     expect(r).toBeLessThan(0.6);
   });
-  it('6500K is neutral white', () => {
-    const [r, g, b] = kelvinToRgb(6500);
-    expect(r).toBeCloseTo(1, 2);
-    expect(g).toBeCloseTo(1, 2);
-    expect(b).toBeCloseTo(1, 2);
+
+  it('kelvinToRgb is the sun color', () => {
+    expect(kelvinToRgb(5000)).toEqual(kelvinSunColor(5000));
   });
-  it('returns components in [0,1]', () => {
-    for (const k of [1500, 3000, 5000, 8000, 20000]) {
-      for (const c of kelvinToRgb(k)) {
+
+  it('background factor is neutral at 6500K and warm at 1500K', () => {
+    const neutral = kelvinBackgroundFactor(6500);
+    expect(neutral[0]).toBeCloseTo(1, 5);
+    expect(neutral[1]).toBeCloseTo(1, 5);
+    expect(neutral[2]).toBeCloseTo(1, 5);
+    const [r, g, b] = kelvinBackgroundFactor(1500);
+    expect(r).toBeGreaterThan(g);
+    expect(g).toBeGreaterThan(b);
+    expect(b).toBeGreaterThan(0.5);
+  });
+
+  it('cools the sky multiplier at high temperatures', () => {
+    const [r] = kelvinBackgroundFactor(20000);
+    expect(r).toBeLessThan(0.9);
+  });
+
+  it('keeps palette components in [0,1]', () => {
+    for (const k of [1500, 3000, 5000, 6500, 8000, 20000]) {
+      for (const c of [...kelvinSunColor(k), ...kelvinSkyColor(k), ...kelvinGroundColor(k)]) {
         expect(c).toBeGreaterThanOrEqual(0);
         expect(c).toBeLessThanOrEqual(1);
       }
@@ -31,15 +71,8 @@ describe('kelvinToRgb', () => {
   });
 });
 
-describe('kelvinBackgroundFactor', () => {
-  it('adds a subtle warm sunset tint at warm temperatures (gold, not red)', () => {
-    const [r, g, b] = kelvinBackgroundFactor(1500);
-    expect(r).toBeGreaterThan(g); // warmed
-    expect(g).toBeGreaterThan(b); // not flipped to red
-    expect(b).toBeGreaterThan(0.5); // blue still present
-  });
-  it('cools the sky at high temperatures', () => {
-    const [r] = kelvinBackgroundFactor(20000);
-    expect(r).toBeLessThan(0.9);
+describe('paletteFromKelvin', () => {
+  it('packs the neutral sun as warm white', () => {
+    expect(paletteFromKelvin(6500, defaultKelvinAnchors(), 0xb8dbf7).sunColor).toBe(0xfff8dc);
   });
 });

@@ -106,6 +106,23 @@ describe('createEngine', () => {
     expect(store.getState().lightDir).toBe(dir);
   });
 
+  it('passes stored temperature on the first theme', async () => {
+    const { adapter, setTheme } = makeAdapter('three');
+    vi.mocked(createRenderer).mockResolvedValue(adapter);
+    const store = createEditorStore({ temperature: 5000 });
+    await createEngine({
+      canvas: makeCanvas(), atlasCanvas: makeCanvas(), store, caps: CAPS, propModels: [],
+    });
+    expect(setTheme).toHaveBeenCalledWith(expect.objectContaining({
+      ambient: store.getState().ambient,
+      directional: store.getState().directional,
+      temperature: 5000,
+      lightDir: store.getState().lightDir,
+      exposure: store.getState().exposure,
+      skyColor: store.getState().skyColor,
+    }));
+  });
+
   it('seeds viewTheta from the camera on init', async () => {
     const { adapter } = makeAdapter('three');
     vi.mocked(createRenderer).mockResolvedValue(adapter);

@@ -51,6 +51,7 @@ function makeEngine() {
     setDirectional: vi.fn(),
     setLightDir: vi.fn(),
     setTemperature: vi.fn(),
+    setLighting: vi.fn(),
   };
 }
 
@@ -216,6 +217,14 @@ describe('DebugPanel', () => {
     const slider = document.querySelector('.temperature input[type="range"]') as HTMLInputElement;
     fireEvent.change(slider, { target: { value: '8000' } });
     expect(engine.setTemperature).toHaveBeenCalledWith(8000);
+  });
+
+  it('sets exposure through the lighting patch', () => {
+    const { engine } = renderWith(<DebugPanel />);
+    fireEvent.click(screen.getByRole('button', { name: '调试' }));
+    const slider = document.querySelector('.exposure input[type="range"]') as HTMLInputElement;
+    fireEvent.change(slider, { target: { value: '1.2' } });
+    expect(engine.setLighting).toHaveBeenCalledWith({ exposure: 1.2 });
   });
 });
 

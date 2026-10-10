@@ -469,7 +469,7 @@ export class WebGLAdapter implements RendererAdapter {
       const g = ((theme.background >> 8) & 0xff) / 255;
       const b = (theme.background & 0xff) / 255;
       this.gl.clearColor(r, g, b, 1);
-    } else {
+    } else if (theme.temperature !== undefined) {
       const f = this.bgFactor;
       this.gl.clearColor(this.sky.r * f[0], this.sky.g * f[1], this.sky.b * f[2], 1);
     }

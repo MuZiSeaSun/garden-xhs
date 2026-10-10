@@ -14,9 +14,63 @@ import { propTriangleCount } from '../core/prop-mesh-builder';
 import { createHistory } from '../core/history';
 import { BLOCK, isTerrainBlock, type BlockId } from '../core/block-types';
 import { itemFootprintSupported, terrainPlaceTarget } from '../core/placement';
-import type { RendererAdapter, BlockDelta, Capabilities } from '../rendering/renderer-api';
+import { paletteFromKelvin, type KelvinAnchorHex } from '../rendering/color-temperature';
+import { PASTEL_CLEAR_COLOR } from '../rendering/pastel-lighting';
+import type { RendererAdapter, BlockDelta, Capabilities, Theme } from '../rendering/renderer-api';
 import type { PropModelData } from '../core/prop-types';
-import type { EditorMode, EditorStore } from './editor-store';
+import type { EditorMode, EditorState, EditorStore, LightingPatch } from './editor-store';
+
+const DERIVE_KEYS = [
+  'temperature',
+  'sunNeutral', 'sunWarm', 'sunCool',
+  'skyNeutral', 'skyWarm', 'skyCool',
+  'groundNeutral', 'groundWarm', 'groundCool',
+] as const;
+
+function anchorsOf(s: EditorState): KelvinAnchorHex {
+  return {
+    sunNeutral: s.sunNeutral, sunWarm: s.sunWarm, sunCool: s.sunCool,
+    skyNeutral: s.skyNeutral, skyWarm: s.skyWarm, skyCool: s.skyCool,
+    groundNeutral: s.groundNeutral, groundWarm: s.groundWarm, groundCool: s.groundCool,
+  };
+}
+
+function deriveLighting(state: EditorState, patch: LightingPatch): LightingPatch {
+  const derive = DERIVE_KEYS.some((k) => patch[k] !== undefined);
+  const manual = patch.skyColor !== undefined || patch.groundColor !== undefined
+    || patch.sunColor !== undefined || patch.background !== undefined;
+  if (!derive || manual) return patch;
+  const next = { ...state, ...patch };
+  return { ...patch, ...paletteFromKelvin(next.temperature, anchorsOf(next), PASTEL_CLEAR_COLOR) };
+}
+
+function lightingTheme(s: EditorState): Theme {
+  return {
+    ambient: s.ambient,
+    directional: s.directional,
+    temperature: s.temperature,
+    lightDir: s.lightDir,
+    exposure: s.exposure,
+    envMapIntensity: s.envMapIntensity,
+    envBlur: s.envBlur,
+    bloomStrength: s.bloomStrength,
+    bloomRadius: s.bloomRadius,
+    bloomThreshold: s.bloomThreshold,
+    roughness: s.roughness,
+    metalness: s.metalness,
+    shadowBias: s.shadowBias,
+    shadowNormalBias: s.shadowNormalBias,
+    shadowMapSize: s.shadowMapSize,
+    shadowExtent: s.shadowExtent,
+    shadowNear: s.shadowNear,
+    shadowFar: s.shadowFar,
+    lightDistance: s.lightDistance,
+    skyColor: s.skyColor,
+    groundColor: s.groundColor,
+    sunColor: s.sunColor,
+    background: s.background,
+  };
+}
 
 export interface Engine {
   setMode(mode: EditorMode): void;
@@ -34,6 +88,7 @@ export interface Engine {
   setDirectional(value: number): void;
   setLightDir(dir: readonly [number, number, number]): void;
   setTemperature(kelvin: number): void;
+  setLighting(patch: LightingPatch): void;
 }
 
 export interface EngineOptions {
@@ -66,7 +121,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine | null> 
   if (renderer.name === 'null') return null;
 
   const initial = store.getState();
-  renderer.setTheme({ ambient: initial.ambient, directional: initial.directional, lightDir: initial.lightDir });
+  renderer.setTheme(lightingTheme(initial));
 
   seedGround(world);
   fitViewport(camera, canvas.clientWidth / canvas.clientHeight);
@@ -200,7 +255,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine | null> 
   const syncOrbit = (): void => {
     renderer.setCamera(toRendererCameraState(camera));
     const s = store.getState();
-    renderer.setTheme({ ambient: s.ambient, directional: s.directional, temperature: s.temperature, lightDir: s.lightDir });
+    renderer.setTheme({ lightDir: s.lightDir });
     store.setState({ viewTheta: camera.theta });
   };
 
@@ -300,7 +355,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine | null> 
     renderer = next;
     disposeGestures = bindGestures(canvas, gestureHandlers);
     const s = store.getState();
-    next.setTheme({ ambient: s.ambient, directional: s.directional, temperature: s.temperature, lightDir: s.lightDir, propOpacity: s.mode === 'terrain' ? 0.4 : 1 });
+    next.setTheme({ ...lightingTheme(s), propOpacity: s.mode === 'terrain' ? 0.4 : 1 });
     next.resize(canvas.clientWidth, canvas.clientHeight, window.devicePixelRatio || 1);
     next.syncWorld(world.snapshot());
     next.definePropModels?.(propModels);
@@ -352,6 +407,12 @@ export async function createEngine(opts: EngineOptions): Promise<Engine | null> 
     }
   });
 
+  const applyLighting = (patch: LightingPatch): void => {
+    const next = deriveLighting(store.getState(), patch);
+    store.setState(next);
+    renderer.setTheme(next);
+  };
+
   return {
     setMode,
     selectBlock: (type) => store.setState({ currentBlockType: type, terrainAction: 'place' }),
@@ -364,9 +425,10 @@ export async function createEngine(opts: EngineOptions): Promise<Engine | null> 
     shareNote: onShareNote,
     setPerspective,
     switchAdapter: (name) => { void switchAdapter(name); },
-    setAmbient: (value) => { store.setState({ ambient: value }); renderer.setTheme({ ambient: value }); },
-    setDirectional: (value) => { store.setState({ directional: value }); renderer.setTheme({ directional: value }); },
-    setLightDir: (dir) => { store.setState({ lightDir: dir }); renderer.setTheme({ lightDir: dir }); },
-    setTemperature: (kelvin) => { store.setState({ temperature: kelvin }); renderer.setTheme({ temperature: kelvin }); },
+    setAmbient: (value) => applyLighting({ ambient: value }),
+    setDirectional: (value) => applyLighting({ directional: value }),
+    setLightDir: (dir) => applyLighting({ lightDir: dir }),
+    setTemperature: (kelvin) => applyLighting({ temperature: kelvin }),
+    setLighting: applyLighting,
   };
 }

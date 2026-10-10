@@ -33,8 +33,10 @@ export interface Ray {
   readonly direction: readonly [number, number, number];
 }
 
-export const DEFAULT_AMBIENT = 0.78;
-export const DEFAULT_DIRECTIONAL = 0.52;
+/** 天光强度（半球光）。越高阴影越浅。调试面板「环境光」。约 0.2–1.2 */
+export const DEFAULT_AMBIENT = 0.35;
+/** 太阳强度。越高受光面越亮、影子对比越强。调试面板「方向光」。约 0.5–2 */
+export const DEFAULT_DIRECTIONAL = 1.5;
 
 export interface Theme {
   readonly background?: number;
@@ -51,6 +53,24 @@ export interface Theme {
   readonly lightDir?: readonly [number, number, number];
   /** 物品绘制不透明度。小于 1 时只改物品：仍做深度测试，但不写入深度。 */
   readonly propOpacity?: number;
+  readonly exposure?: number;
+  readonly envMapIntensity?: number;
+  readonly envBlur?: number;
+  readonly bloomStrength?: number;
+  readonly bloomRadius?: number;
+  readonly bloomThreshold?: number;
+  readonly roughness?: number;
+  readonly metalness?: number;
+  readonly shadowBias?: number;
+  readonly shadowNormalBias?: number;
+  readonly shadowMapSize?: number;
+  readonly shadowExtent?: number;
+  readonly shadowNear?: number;
+  readonly shadowFar?: number;
+  readonly lightDistance?: number;
+  readonly skyColor?: number;
+  readonly groundColor?: number;
+  readonly sunColor?: number;
 }
 
 export interface RendererInitOptions {
