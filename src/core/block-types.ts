@@ -19,15 +19,22 @@ export interface BlockDef {
   readonly cross?: boolean;
 }
 
+const TERRAIN_IDS: ReadonlySet<number> = new Set([BLOCK.GRASS, BLOCK.SOIL, BLOCK.STONE, BLOCK.LEAF]);
+
+/** 可放置、可承托物品的地形。旧档里的水、花、灌木、木头不算。 */
+export function isTerrainBlock(type: number): boolean {
+  return TERRAIN_IDS.has(type);
+}
+
 export const BLOCK_DEFS: Readonly<Record<BlockId, BlockDef | undefined>> = {
   [BLOCK.AIR]: undefined,
-  [BLOCK.GRASS]:        { atlas: 0, opaque: true },
-  [BLOCK.SOIL]:         { atlas: 1, opaque: true },
-  [BLOCK.STONE]:        { atlas: 2, opaque: true },
-  [BLOCK.WATER]:        { atlas: 3, opaque: false },
-  [BLOCK.FLOWER_RED]:   { atlas: 4, opaque: true, cross: true },
-  [BLOCK.FLOWER_YELLOW]:{ atlas: 5, opaque: true, cross: true },
-  [BLOCK.BUSH]:         { atlas: 6, opaque: true },
-  [BLOCK.WOOD]:         { atlas: 7, opaque: true },
-  [BLOCK.LEAF]:         { atlas: 8, opaque: false },
+  [BLOCK.GRASS]: { atlas: 0, opaque: true },
+  [BLOCK.SOIL]:  { atlas: 1, opaque: true },
+  [BLOCK.STONE]: { atlas: 2, opaque: true },
+  [BLOCK.WATER]: undefined,
+  [BLOCK.FLOWER_RED]: undefined,
+  [BLOCK.FLOWER_YELLOW]: undefined,
+  [BLOCK.BUSH]: undefined,
+  [BLOCK.WOOD]: undefined,
+  [BLOCK.LEAF]: { atlas: 8, opaque: false },
 };

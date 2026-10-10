@@ -4,7 +4,7 @@ import type { PropModelData } from '../../src/core/prop-types';
 import { createPropWorld } from '../../src/core/prop-world';
 
 const emptyModel = (footprint: number, height: number): PropModelData =>
-  ({ name: '', icon: '', positions: new Float32Array(0), normals: new Float32Array(0), colors: new Float32Array(0), indices: new Uint16Array(0), footprint, height });
+  ({ name: '', icon: '', positions: new Float32Array(0), normals: new Float32Array(0), colors: new Float32Array(0), alpha: new Float32Array(0), indices: new Uint16Array(0), footprint, height });
 const MODELS: PropModelData[] = [emptyModel(1, 3), emptyModel(2, 1)]; // tree / plat
 
 describe('PropWorld', () => {

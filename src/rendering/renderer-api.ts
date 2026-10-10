@@ -33,15 +33,24 @@ export interface Ray {
   readonly direction: readonly [number, number, number];
 }
 
+export const DEFAULT_AMBIENT = 0.78;
+export const DEFAULT_DIRECTIONAL = 0.52;
+
 export interface Theme {
   readonly background?: number;
   readonly fogColor?: number;
   readonly fogNear?: number;
   readonly fogFar?: number;
-  /** 全局光照强度倍数（1 = 默认，越大越亮）。 */
-  readonly exposure?: number;
+  /** 环境光强度。与方向光分开，不随光照角度变化。 */
+  readonly ambient?: number;
+  /** 方向光强度。只乘在受光面上，方向本身不改变这个值。 */
+  readonly directional?: number;
   /** 光照色温（开尔文）。 */
   readonly temperature?: number;
+  /** 指向光源的方向。画面右侧来光时，影子落在画面左侧。 */
+  readonly lightDir?: readonly [number, number, number];
+  /** 物品绘制不透明度。小于 1 时只改物品：仍做深度测试，但不写入深度。 */
+  readonly propOpacity?: number;
 }
 
 export interface RendererInitOptions {

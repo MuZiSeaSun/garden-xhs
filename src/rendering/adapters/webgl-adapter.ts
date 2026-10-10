@@ -40,7 +40,7 @@ const FRAG = /* glsl */ `
   uniform sampler2D uAtlas;
   uniform vec3 uLightDir;
   uniform float uAmbient;
-  uniform float uExposure;
+  uniform float uDirectional;
   uniform vec3 uLightTint;
   varying vec2 vUV;
   varying vec3 vNormal;
@@ -52,9 +52,9 @@ const FRAG = /* glsl */ `
   void main() {
     vec4 texColor = texture2D(uAtlas, vUV);
     if (texColor.a < 0.1) discard;
-    float diff = max(dot(normalize(vNormal), uLightDir), 0.0);
-    // 与 Three 的 Lambert 管线保持一致：光照乘 1/π（BRDF 归一化），最后做 linear→sRGB 输出编码
-    vec3 lit = texColor.rgb * vLight * (uAmbient + (1.0 - uAmbient) * diff) * uExposure * RECIPROCAL_PI * uLightTint;
+    float diff = max(dot(normalize(vNormal), normalize(uLightDir)), 0.0);
+    // 环境光与方向光各自相加。方向只决定 diff，不改变 uDirectional。
+    vec3 lit = texColor.rgb * vLight * (uAmbient + uDirectional * diff) * RECIPROCAL_PI * uLightTint;
     gl_FragColor = vec4(toSRGB(lit), texColor.a);
   }
 `;
@@ -78,8 +78,9 @@ const PROP_FRAG = /* glsl */ `
   #define RECIPROCAL_PI 0.31830988618
   uniform vec3 uLightDir;
   uniform float uAmbient;
-  uniform float uExposure;
+  uniform float uDirectional;
   uniform vec3 uLightTint;
+  uniform float uOpacity;
   varying vec3 vNormal;
   varying vec3 vColor;
   vec3 toSRGB(vec3 c) {
@@ -87,9 +88,9 @@ const PROP_FRAG = /* glsl */ `
     return mix(c * 12.92, 1.055 * pow(c, vec3(0.4166667)) - 0.055, step(vec3(0.0031308), c));
   }
   void main() {
-    float diff = max(dot(normalize(vNormal), uLightDir), 0.0);
-    vec3 lit = vColor * (uAmbient + (1.0 - uAmbient) * diff) * uExposure * RECIPROCAL_PI * uLightTint;
-    gl_FragColor = vec4(toSRGB(lit), 1.0);
+    float diff = max(dot(normalize(vNormal), normalize(uLightDir)), 0.0);
+    vec3 lit = vColor * (uAmbient + uDirectional * diff) * RECIPROCAL_PI * uLightTint;
+    gl_FragColor = vec4(toSRGB(lit), uOpacity);
   }
 `;
 
@@ -158,7 +159,7 @@ export class WebGLAdapter implements RendererAdapter {
   private uAtlas!: WebGLUniformLocation | null;
   private uLightDir!: WebGLUniformLocation | null;
   private uAmbient!: WebGLUniformLocation | null;
-  private uExposure!: WebGLUniformLocation | null;
+  private uDirectional!: WebGLUniformLocation | null;
   private uLightTint!: WebGLUniformLocation | null;
 
   private matrix = new Float32Array(16);
@@ -183,8 +184,12 @@ export class WebGLAdapter implements RendererAdapter {
   private pANrm = 0;
   private pACol = 0;
   private pMatrix!: WebGLUniformLocation | null;
-  private pExposure!: WebGLUniformLocation | null;
+  private pAmbient!: WebGLUniformLocation | null;
+  private pDirectional!: WebGLUniformLocation | null;
   private pLightTint!: WebGLUniformLocation | null;
+  private pLightDir!: WebGLUniformLocation | null;
+  private pOpacity!: WebGLUniformLocation | null;
+  private propOpacity = 1;
   private propBatches: Array<{
     modelId: number; posBuf: WebGLBuffer; nrmBuf: WebGLBuffer;
     colBuf: WebGLBuffer; idxBuf: WebGLBuffer; count: number;
@@ -216,7 +221,7 @@ export class WebGLAdapter implements RendererAdapter {
     this.uAtlas = this.gl.getUniformLocation(this.program, 'uAtlas');
     this.uLightDir = this.gl.getUniformLocation(this.program, 'uLightDir');
     this.uAmbient = this.gl.getUniformLocation(this.program, 'uAmbient');
-    this.uExposure = this.gl.getUniformLocation(this.program, 'uExposure');
+    this.uDirectional = this.gl.getUniformLocation(this.program, 'uDirectional');
     this.uLightTint = this.gl.getUniformLocation(this.program, 'uLightTint');
 
     this.posBuf = this.gl.createBuffer()!;
@@ -228,8 +233,8 @@ export class WebGLAdapter implements RendererAdapter {
     this.gl.uniform1i(this.uAtlas, 0);
     const ldir = normalize([0.5, 1, 0.3]);
     this.gl.uniform3f(this.uLightDir, ldir[0], ldir[1], ldir[2]);
-    this.gl.uniform1f(this.uAmbient, 0.6);
-    this.gl.uniform1f(this.uExposure, 1);
+    this.gl.uniform1f(this.uAmbient, 0.78);
+    this.gl.uniform1f(this.uDirectional, 0.52);
     this.gl.uniform3f(this.uLightTint, 1, 1, 1);
 
     this.propProgram = this.createProgram(PROP_VERT, PROP_FRAG);
@@ -238,13 +243,17 @@ export class WebGLAdapter implements RendererAdapter {
     this.pANrm = this.gl.getAttribLocation(this.propProgram, 'normal');
     this.pACol = this.gl.getAttribLocation(this.propProgram, 'aColor');
     this.pMatrix = this.gl.getUniformLocation(this.propProgram, 'uMatrix');
-    this.pExposure = this.gl.getUniformLocation(this.propProgram, 'uExposure');
+    this.pAmbient = this.gl.getUniformLocation(this.propProgram, 'uAmbient');
+    this.pDirectional = this.gl.getUniformLocation(this.propProgram, 'uDirectional');
     this.pLightTint = this.gl.getUniformLocation(this.propProgram, 'uLightTint');
+    this.pLightDir = this.gl.getUniformLocation(this.propProgram, 'uLightDir');
+    this.pOpacity = this.gl.getUniformLocation(this.propProgram, 'uOpacity');
     const ldir2 = normalize([0.5, 1, 0.3]);
-    this.gl.uniform3f(this.gl.getUniformLocation(this.propProgram, 'uLightDir'), ldir2[0], ldir2[1], ldir2[2]);
-    this.gl.uniform1f(this.gl.getUniformLocation(this.propProgram, 'uAmbient'), 0.6);
-    this.gl.uniform1f(this.pExposure, 1);
+    this.gl.uniform3f(this.pLightDir, ldir2[0], ldir2[1], ldir2[2]);
+    this.gl.uniform1f(this.pAmbient, 0.78);
+    this.gl.uniform1f(this.pDirectional, 0.52);
     this.gl.uniform3f(this.pLightTint, 1, 1, 1);
+    this.gl.uniform1f(this.pOpacity, 1);
     if (!this.gl.getExtension('OES_element_index_uint')) {
       throw new Error('OES_element_index_uint unavailable'); // 工厂降级到其余适配器
     }
@@ -446,9 +455,10 @@ export class WebGLAdapter implements RendererAdapter {
 
   setTheme(theme: Theme): void {
     this.gl.useProgram(this.program);
-    if (theme.exposure !== undefined) {
-      this.gl.uniform1f(this.uExposure, theme.exposure);
-    }
+    const light = theme.lightDir === undefined ? null : normalize([theme.lightDir[0], theme.lightDir[1], theme.lightDir[2]]);
+    if (light) this.gl.uniform3f(this.uLightDir, light[0], light[1], light[2]);
+    if (theme.ambient !== undefined) this.gl.uniform1f(this.uAmbient, theme.ambient);
+    if (theme.directional !== undefined) this.gl.uniform1f(this.uDirectional, theme.directional);
     if (theme.temperature !== undefined) {
       this.tint = kelvinToRgb(theme.temperature);
       this.bgFactor = kelvinBackgroundFactor(theme.temperature);
@@ -465,11 +475,15 @@ export class WebGLAdapter implements RendererAdapter {
     }
     if (this.propProgram) {
       this.gl.useProgram(this.propProgram);
-      if (theme.exposure !== undefined) this.gl.uniform1f(this.pExposure, theme.exposure);
+      if (theme.ambient !== undefined) this.gl.uniform1f(this.pAmbient, theme.ambient);
+      if (theme.directional !== undefined) this.gl.uniform1f(this.pDirectional, theme.directional);
       if (theme.temperature !== undefined) {
         this.gl.uniform3f(this.pLightTint, this.tint[0], this.tint[1], this.tint[2]);
       }
+      if (theme.propOpacity !== undefined) this.gl.uniform1f(this.pOpacity, theme.propOpacity);
+      if (light) this.gl.uniform3f(this.pLightDir, light[0], light[1], light[2]);
     }
+    if (theme.propOpacity !== undefined) this.propOpacity = theme.propOpacity;
     this.requestRender();
   }
 
@@ -494,6 +508,13 @@ export class WebGLAdapter implements RendererAdapter {
     if (this.propBatches.length > 0 && this.cameraState) {
       gl.useProgram(this.propProgram);
       gl.uniformMatrix4fv(this.pMatrix, false, this.matrix);
+      gl.uniform1f(this.pOpacity, this.propOpacity);
+      const ghost = this.propOpacity < 1;
+      if (ghost) {
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        gl.depthMask(false);
+      }
       // 体素 attrib 是全局开关。uv / aLight 道具程序不用；顶点数更大的道具批次会因此 drawElements 失败。
       // 下一帧体素 bindAttributes 会重新打开它们。
       const propLocs = new Set([this.pAPos, this.pANrm, this.pACol]);
@@ -512,6 +533,10 @@ export class WebGLAdapter implements RendererAdapter {
         gl.vertexAttribPointer(this.pACol, 3, gl.FLOAT, false, 0, 0);
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, b.idxBuf);
         gl.drawElements(gl.TRIANGLES, b.count, gl.UNSIGNED_INT, 0);
+      }
+      if (ghost) {
+        gl.depthMask(true);
+        gl.disable(gl.BLEND);
       }
     }
   };

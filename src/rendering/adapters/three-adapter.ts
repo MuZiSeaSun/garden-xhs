@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import {
   RENDERER_API_VERSION,
+  DEFAULT_AMBIENT,
+  DEFAULT_DIRECTIONAL,
   type RendererAdapter,
   type RendererInitOptions,
   type CameraState,
@@ -40,6 +42,62 @@ export function configureAtlasTexture(tex: AtlasTextureLike): void {
   tex.flipY = false;
 }
 
+/** 哑光 PBR。金属度为 0；粗糙度接近 1，只在掠射角留一点高光。 */
+const SURFACE_METALNESS = 0;
+const SURFACE_ROUGHNESS = 0.85;
+
+function srgbToLinear(c: number): number {
+  return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+}
+
+const SLOPE_BIAS_MARK = 'slopeShadowBias';
+
+/**
+ * 阴影比较读的是打包进颜色的深度，polygonOffset 改不到它。
+ * scale：按屏幕空间深度斜率把写入值推远。正对光源的面斜率接近 0。
+ * ceiling：斜率超过这个值就是轮廓上的深度间断。那里只留极小常数，
+ * 避免把接触阴影推离地面。传 0 表示不设上限（地面大平面用）。
+ */
+function slopeBiasShadowDepth(
+  depthMaterial: THREE.Material,
+  webgl2: boolean,
+  scale: number,
+  ceiling = 0,
+): void {
+  if (scale <= 0 || depthMaterial.userData[SLOPE_BIAS_MARK]) return;
+  depthMaterial.userData[SLOPE_BIAS_MARK] = scale;
+  const previous = depthMaterial.onBeforeCompile;
+  const biasLine = ceiling > 0
+    ? `float slopeZ = max(abs(dFdx(fragCoordZ)), abs(dFdy(fragCoordZ)));
+       float biasZ = slopeZ > ${ceiling.toFixed(4)} ? 0.00003 : slopeZ * ${scale.toFixed(1)} + 0.00003;
+       fragCoordZ = min(fragCoordZ + biasZ, 1.0);`
+    : `float slopeZ = max(abs(dFdx(fragCoordZ)), abs(dFdy(fragCoordZ)));
+       fragCoordZ = min(fragCoordZ + slopeZ * ${scale.toFixed(1)} + 0.00002, 1.0);`;
+  depthMaterial.onBeforeCompile = (shader, renderer) => {
+    previous?.call(depthMaterial, shader, renderer);
+    if (!webgl2) {
+      shader.fragmentShader = `#extension GL_OES_standard_derivatives : enable\n${shader.fragmentShader}`;
+    }
+    shader.fragmentShader = shader.fragmentShader.replace(
+      'float fragCoordZ = 0.5 * vHighPrecisionZW[0] / vHighPrecisionZW[1] + 0.5;',
+      `float fragCoordZ = 0.5 * vHighPrecisionZW[0] / vHighPrecisionZW[1] + 0.5;\n       ${biasLine}`,
+    );
+  };
+  depthMaterial.needsUpdate = true;
+}
+
+function enableShadowSlopeBias(mesh: THREE.Mesh, scale: number): void {
+  // r160 实际参数是 renderer, object, camera, shadowCamera, geometry, depthMaterial, group。
+  // @types/three 少了 camera，按类型取“depthMaterial”会拿到几何体。
+  mesh.onBeforeShadow = ((...args: unknown[]) => {
+    const renderer = args[0];
+    const depthMaterial = args[5];
+    if (renderer instanceof THREE.WebGLRenderer && depthMaterial instanceof THREE.Material) {
+      slopeBiasShadowDepth(depthMaterial, renderer.capabilities.isWebGL2, scale);
+    }
+  }) as THREE.Object3D['onBeforeShadow'];
+}
+
 export class ThreeAdapter implements RendererAdapter {
   readonly name = 'three';
   readonly apiVersion = RENDERER_API_VERSION;
@@ -48,7 +106,7 @@ export class ThreeAdapter implements RendererAdapter {
   private scene!: THREE.Scene;
   private camera!: THREE.PerspectiveCamera;
   private geometry!: THREE.BufferGeometry;
-  private material!: THREE.MeshLambertMaterial;
+  private material!: THREE.MeshStandardMaterial;
   private ambient!: THREE.AmbientLight;
   private sun!: THREE.DirectionalLight;
   private texture!: THREE.CanvasTexture;
@@ -63,7 +121,9 @@ export class ThreeAdapter implements RendererAdapter {
   private rafId = 0;
   private disposed = false;
   private lastSnapshot: WorldSnapshot | null = null;
-  private propMaterial!: THREE.MeshLambertMaterial;
+  private propMaterial!: THREE.MeshStandardMaterial;
+  private propDepthMaterial!: THREE.MeshDepthMaterial;
+  private propOpacity = 1;
   private propMeshes = new Map<number, THREE.Mesh>();          // modelId → 批 Mesh
   private propInstByModel = new Map<number, PropInstance[]>(); // modelId → 实例列表
   private propModels: readonly PropModelData[] = [];
@@ -93,37 +153,57 @@ export class ThreeAdapter implements RendererAdapter {
 
     this.texture = new THREE.CanvasTexture(atlasCanvas);
     configureAtlasTexture(this.texture);
+    this.texture.colorSpace = THREE.SRGBColorSpace;
 
-    this.material = new THREE.MeshLambertMaterial({
+    this.material = new THREE.MeshStandardMaterial({
       map: this.texture,
       alphaTest: 0.5,
       vertexColors: true,
       side: THREE.DoubleSide,
+      // 双面会把同一平面写进阴影贴图两次，掠射时打出条纹。阴影只画背面。
+      shadowSide: THREE.BackSide,
+      metalness: SURFACE_METALNESS,
+      roughness: SURFACE_ROUGHNESS,
     });
 
     this.geometry = new THREE.BufferGeometry();
     this.mesh = new THREE.Mesh(this.geometry, this.material);
     this.mesh.castShadow = true;
     this.mesh.receiveShadow = true;
+    enableShadowSlopeBias(this.mesh, 2);
     this.scene.add(this.mesh);
 
-    // 环境光 + 方向光（投射阴影）。0.6/0.4 与原先 shader 的 uAmbient=0.6 观感接近。
-    this.ambient = new THREE.AmbientLight(0xffffff, 0.6);
+    // 环境光与方向光强度分开。默认 0.78 / 0.52 等于原先 exposure 1.3 乘 0.6 / 0.4。
+    this.ambient = new THREE.AmbientLight(0xffffff, DEFAULT_AMBIENT);
     this.scene.add(this.ambient);
-    this.sun = new THREE.DirectionalLight(0xffffff, 0.4);
+    this.sun = new THREE.DirectionalLight(0xffffff, DEFAULT_DIRECTIONAL);
     this.sun.target.position.set(5, 3, 5);
     this.sun.position.set(0.5, 1, 0.3).normalize().multiplyScalar(60).add(this.sun.target.position);
     this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(1024, 1024);
-    this.sun.shadow.bias = -0.0005;
-    this.sun.shadow.normalBias = 0.02;
+    this.sun.shadow.mapSize.set(2048, 2048);
+    // 常数深度偏移和法线偏移都会在掠射时把接触阴影推离地面，所以保持 0。
+    // 条纹改由阴影通道的坡度偏移处理。光源距目标 60，近远平面只包住这块范围。
+    this.sun.shadow.bias = 0;
+    this.sun.shadow.normalBias = 0;
     const sc = this.sun.shadow.camera;
-    sc.left = -14; sc.right = 14; sc.top = 14; sc.bottom = -14; sc.near = 1; sc.far = 160;
+    sc.left = -14; sc.right = 14; sc.top = 14; sc.bottom = -14; sc.near = 36; sc.far = 92;
     sc.updateProjectionMatrix();
     this.scene.add(this.sun);
     this.scene.add(this.sun.target);
 
-    this.propMaterial = new THREE.MeshLambertMaterial({ vertexColors: true });
+    this.propMaterial = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      metalness: SURFACE_METALNESS,
+      roughness: SURFACE_ROUGHNESS,
+      // 接触阴影要由朝向光源的那一面投下。改画背面时，影子会从物体另一侧才开始。
+      shadowSide: THREE.FrontSide,
+    });
+    // 单独的深度材质，避免改到 Three 共用的那份（地面会从它克隆）。
+    // 连续面用坡度偏移消自阴影；轮廓处的深度间断不外推，脚底仍然贴住。
+    this.propDepthMaterial = new THREE.MeshDepthMaterial({
+      depthPacking: THREE.RGBADepthPacking,
+    });
+    slopeBiasShadowDepth(this.propDepthMaterial, this.renderer.capabilities.isWebGL2, 2, 0.004);
 
     canvas.addEventListener('webglcontextlost', this.onContextLost);
     canvas.addEventListener('webglcontextrestored', this.onContextRestored);
@@ -144,6 +224,7 @@ export class ThreeAdapter implements RendererAdapter {
     }
     this.propMeshes.clear();
     this.propMaterial?.dispose();
+    this.propDepthMaterial?.dispose();
     this.renderer?.dispose();
   }
 
@@ -251,12 +332,15 @@ export class ThreeAdapter implements RendererAdapter {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(batch.positions, 3));
     g.setAttribute('normal', new THREE.BufferAttribute(batch.normals, 3));
-    g.setAttribute('color', new THREE.BufferAttribute(batch.colors, 3));
+    const linearColors = new Float32Array(batch.colors.length);
+    for (let i = 0; i < batch.colors.length; i++) linearColors[i] = srgbToLinear(batch.colors[i]);
+    g.setAttribute('color', new THREE.BufferAttribute(linearColors, 3));
     g.setIndex(new THREE.BufferAttribute(batch.indices, 1)); // Uint32Array → three 自动启用 OES_element_index_uint
     g.computeBoundingSphere();
     const mesh = new THREE.Mesh(g, this.propMaterial);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
+    mesh.customDepthMaterial = this.propDepthMaterial;
     this.scene.add(mesh);
     this.propMeshes.set(modelId, mesh);
   }
@@ -292,15 +376,28 @@ export class ThreeAdapter implements RendererAdapter {
   }
 
   setTheme(theme: Theme): void {
-    if (theme.exposure !== undefined) {
-      this.ambient.intensity = 0.6 * theme.exposure;
-      this.sun.intensity = 0.4 * theme.exposure;
-    }
+    if (theme.ambient !== undefined) this.ambient.intensity = theme.ambient;
+    if (theme.directional !== undefined) this.sun.intensity = theme.directional;
     if (theme.temperature !== undefined) {
       this.tint = kelvinToRgb(theme.temperature);
       this.bgFactor = kelvinBackgroundFactor(theme.temperature);
       this.ambient.color.setRGB(this.tint[0], this.tint[1], this.tint[2]);
       this.sun.color.setRGB(this.tint[0], this.tint[1], this.tint[2]);
+    }
+    if (theme.lightDir !== undefined) {
+      const [x, y, z] = theme.lightDir;
+      const len = Math.hypot(x, y, z) || 1;
+      const t = this.sun.target.position;
+      this.sun.position.set(t.x + (x / len) * 60, t.y + (y / len) * 60, t.z + (z / len) * 60);
+    }
+    if (theme.propOpacity !== undefined) {
+      this.propOpacity = theme.propOpacity;
+      const ghost = this.propOpacity < 1;
+      this.propMaterial.opacity = this.propOpacity;
+      this.propMaterial.transparent = ghost;
+      this.propMaterial.depthWrite = !ghost;
+      this.propMaterial.depthTest = true;
+      this.propMaterial.needsUpdate = true;
     }
     if (theme.background !== undefined) {
       this.renderer.setClearColor(theme.background, 1);

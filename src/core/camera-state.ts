@@ -10,6 +10,9 @@ const WORLD_RADIUS = 9; // 10×10 场地半径（含少量堆叠余量）
 const FIT_MARGIN = 2.0; // 留白倍数：越大，场地在屏幕上越小
 const HALF_MIN = 6;
 const HALF_MAX = 120;
+/** 注视点可离开岛屿中心的最远距离，避免拖出后找不到。 */
+const PAN_REACH = 40;
+const PAN_CENTER = 5;
 
 const ISO_ELEVATION = Math.atan(1 / Math.SQRT2);
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
@@ -51,6 +54,42 @@ export function fitViewport(c: CameraOrbit, aspect: number): void {
 /** Rotate only around the vertical axis (yaw). Elevation stays fixed (isometric). */
 export function orbit(c: CameraOrbit, dx: number, _dy: number): void {
   c.theta += dx * 0.01;
+}
+
+/** 双指拧转：弧度，正值让岛屿在屏幕上顺时针转。俯仰不变。 */
+export function yaw(c: CameraOrbit, radians: number): void {
+  c.theta += radians;
+}
+
+const TILT_LIMIT = 10 * Math.PI / 180;
+/** 双指共同垂直滑过约 120px 时，仰角走满 10°。 */
+const TILT_PER_PX = TILT_LIMIT / 120;
+
+/**
+ * 双指同时上滑或下滑，改变相机仰角。
+ * dy 为屏幕像素，向下为正；下滑抬高仰角（更俯视），上滑降低仰角（更平视）。
+ * 相对默认等轴测仰角最多 ±10°。
+ */
+export function tilt(c: CameraOrbit, dy: number): void {
+  const elevation = Math.PI / 2 - c.phi;
+  const next = clamp(elevation + dy * TILT_PER_PX, ISO_ELEVATION - TILT_LIMIT, ISO_ELEVATION + TILT_LIMIT);
+  c.phi = Math.PI / 2 - next;
+}
+
+/**
+ * 单指拖动岛屿。屏幕位移按当前取景换算到地面，内容跟随手指。
+ * viewportHeight 为画布 CSS 像素高度。
+ */
+export function pan(c: CameraOrbit, dx: number, dy: number, viewportHeight: number): void {
+  const scale = (2 * halfHeightOf(c)) / Math.max(viewportHeight, 1);
+  const rightX = Math.sin(c.theta);
+  const rightZ = -Math.cos(c.theta);
+  const upX = -Math.cos(c.theta);
+  const upZ = -Math.sin(c.theta);
+  const lo = PAN_CENTER - PAN_REACH;
+  const hi = PAN_CENTER + PAN_REACH;
+  c.target[0] = clamp(c.target[0] + (-rightX * dx + upX * dy) * scale, lo, hi);
+  c.target[2] = clamp(c.target[2] + (-rightZ * dx + upZ * dy) * scale, lo, hi);
 }
 
 /** Zoom by changing the view frustum size (framing); camera distance untouched. */

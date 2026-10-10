@@ -7,6 +7,9 @@ import {
   createCameraOrbit,
   toRendererCameraState,
   orbit,
+  yaw,
+  tilt,
+  pan,
   zoom,
   fitViewport,
   setDistance,
@@ -15,14 +18,15 @@ import { loadWorld, saveWorld } from './platform/storage';
 import { saveToAlbum, shareAsNote } from './platform/share';
 import { bindGestures } from './input/gesture';
 import { bindUI, type EditorMode } from './ui';
+import { lightDirToDisk } from './core/light-direction';
 import { PROP_MODELS } from './assets/props.generated';
 import { createPropWorld } from './core/prop-world';
-import { pick, type PickHit } from './core/pick';
+import { pick, pickItem, type PickHit } from './core/pick';
 import { propTriangleCount } from './core/prop-mesh-builder';
 import { createHistory } from './core/history';
-import { PRESETS } from './core/presets';
-import { BLOCK, type BlockId } from './core/block-types';
-import type { RendererAdapter, BlockDelta } from './rendering/renderer-api';
+import { BLOCK, isTerrainBlock, type BlockId } from './core/block-types';
+import { itemFootprintSupported, terrainPlaceTarget } from './core/placement';
+import { DEFAULT_AMBIENT, DEFAULT_DIRECTIONAL, type RendererAdapter, type BlockDelta } from './rendering/renderer-api';
 import type { SavePayload } from './platform/storage';
 
 async function bootstrap(): Promise<void> {
@@ -37,8 +41,10 @@ async function bootstrap(): Promise<void> {
   const history = createHistory();
   const propWorld = createPropWorld(PROP_MODELS);
   const PROP_TRIANGLE_BUDGET = 90_000;
-  let exposure = 1.3;
+  let ambient = DEFAULT_AMBIENT;
+  let directional = DEFAULT_DIRECTIONAL;
   let temperature = 5000;
+  let lightDir: readonly [number, number, number] = [0.5, 1, 0.3];
 
   let renderer: RendererAdapter;
   try {
@@ -56,7 +62,7 @@ async function bootstrap(): Promise<void> {
     return;
   }
 
-  renderer.setTheme({ exposure });
+  renderer.setTheme({ ambient, directional, lightDir });
 
   // 先铺一层草地并首次渲染，避免首屏空白，也不被存档 I/O 阻塞。
   seedGround(world);
@@ -69,7 +75,10 @@ async function bootstrap(): Promise<void> {
   // 恢复存档（存在时覆盖地面与相机，再重渲染一次）
   const saved = await loadWorld();
   if (saved && saved.blocks.length === WORLD_SIZE ** 3) {
-    for (let i = 0; i < saved.blocks.length; i++) world.blocks[i] = saved.blocks[i];
+    for (let i = 0; i < saved.blocks.length; i++) {
+      const b = saved.blocks[i];
+      world.blocks[i] = isTerrainBlock(b) ? b : BLOCK.AIR;
+    }
     camera.theta = saved.camera.theta;
     camera.phi = saved.camera.phi;
     camera.radius = saved.camera.radius;
@@ -83,8 +92,9 @@ async function bootstrap(): Promise<void> {
 
   // 状态
   let mode: EditorMode = 'orbit';
+  let terrainAction: 'place' | 'remove' | null = null;
+  let itemAction: 'place' | 'remove' | null = null;
   let currentBlockType: BlockId = BLOCK.GRASS;
-  let currentPreset: string | null = null;
   let currentPropModelId: number | null = null;
   let userZoomed = false;
 
@@ -113,6 +123,15 @@ async function bootstrap(): Promise<void> {
     const model = PROP_MODELS[currentPropModelId];
     if (!model) return;
     const tx = hit.x + hit.nx, ty = hit.y + hit.ny, tz = hit.z + hit.nz;
+    if (!itemFootprintSupported(
+      tx, ty, tz, model.footprint,
+      (x, y, z) => world.getBlock(x, y, z),
+      (x, y, z) => propWorld.propAt(x, y, z),
+      PROP_MODELS,
+    )) {
+      showToast('这里不能放物品');
+      return;
+    }
     // 占用列全部格须为空气（不得插入地形）；边界与道具重叠由 propWorld.add 校验
     for (let dx = 0; dx < model.footprint; dx++) {
       for (let dy = 0; dy < model.height; dy++) {
@@ -147,33 +166,26 @@ async function bootstrap(): Promise<void> {
   };
 
   const handleTap = (x: number, y: number): void => {
+    if (mode === 'orbit') return;
     const ray = renderer.screenPointToRay(x, y);
-    const hit = pick(ray.origin, ray.direction, world, propWorld, camera.radius * 2);
+    const reach = camera.radius * 2;
+    const hit = mode === 'item'
+      ? pickItem(ray.origin, ray.direction, world, propWorld, PROP_MODELS, reach)
+      : pick(ray.origin, ray.direction, world, propWorld, reach, mode === 'terrain');
 
-    if (mode === 'place') {
-      if (currentPropModelId !== null) {
-        placeProp(hit);
-      } else if (currentPreset) {
-        const preset = PRESETS[currentPreset];
-        if (!preset || !hit) return;
-        const anchor = [hit.x + hit.nx, hit.y + hit.ny, hit.z + hit.nz] as const;
-        const added: Array<{ x: number; y: number; z: number; type: BlockId }> = [];
-        const ops: Array<{ x: number; y: number; z: number; prev: BlockId }> = [];
-        for (const b of preset.blocks) {
-          const bx = anchor[0] + b.dx, by = anchor[1] + b.dy, bz = anchor[2] + b.dz;
-          if (world.getBlock(bx, by, bz) !== BLOCK.AIR) continue;
-          if (propWorld.propAt(bx, by, bz)) continue;
-          if (!world.setBlock(bx, by, bz, b.type as BlockId)) continue;
-          ops.push({ x: bx, y: by, z: bz, prev: BLOCK.AIR });
-          added.push({ x: bx, y: by, z: bz, type: b.type as BlockId });
+    if (mode === 'terrain') {
+      if (terrainAction === 'remove') {
+        if (hit && hit.kind === 'block') {
+          const prev = world.getBlock(hit.x, hit.y, hit.z);
+          if (prev !== BLOCK.AIR && world.setBlock(hit.x, hit.y, hit.z, BLOCK.AIR)) {
+            history.push({ type: 'set', x: hit.x, y: hit.y, z: hit.z, prev });
+            applyDelta({ added: [], removed: [{ x: hit.x, y: hit.y, z: hit.z }] });
+          }
         }
-        if (added.length) {
-          history.push({ type: 'batch', ops });
-          applyDelta({ added, removed: [] });
-        }
-      } else if (hit) {
-        // 命中 prop 或 block 一视同仁：目标格 = 命中格 + 法线
-        const tx = hit.x + hit.nx, ty = hit.y + hit.ny, tz = hit.z + hit.nz;
+      } else if (terrainAction === 'place' && hit && hit.kind === 'block') {
+        const target = terrainPlaceTarget(hit);
+        if (!target) return;
+        const tx = target.x, ty = target.y, tz = target.z;
         if (
           world.getBlock(tx, ty, tz) === BLOCK.AIR &&
           !propWorld.propAt(tx, ty, tz) &&
@@ -183,23 +195,46 @@ async function bootstrap(): Promise<void> {
           applyDelta({ added: [{ x: tx, y: ty, z: tz, type: currentBlockType }], removed: [] });
         }
       }
-    } else if (mode === 'remove') {
-      if (hit && hit.kind === 'prop') {
-        removeProp(hit);
-      } else if (hit && hit.kind === 'block') {
-        const prev = world.getBlock(hit.x, hit.y, hit.z);
-        if (prev !== BLOCK.AIR && world.setBlock(hit.x, hit.y, hit.z, BLOCK.AIR)) {
-          history.push({ type: 'set', x: hit.x, y: hit.y, z: hit.z, prev });
-          applyDelta({ added: [], removed: [{ x: hit.x, y: hit.y, z: hit.z }] });
-        }
+    } else if (mode === 'item') {
+      if (itemAction === 'remove') {
+        if (hit && hit.kind === 'prop') removeProp(hit);
+      } else if (itemAction === 'place') {
+        placeProp(hit);
       }
     }
   };
 
+  let lightDisk: { setLightDisk(nx: number, ny: number): void; setViewTheta(theta: number): void } = {
+    setLightDisk() {},
+    setViewTheta() {},
+  };
+  const syncLightDisk = (): void => {
+    lightDisk.setViewTheta(camera.theta);
+    const p = lightDirToDisk(lightDir, camera.theta);
+    lightDisk.setLightDisk(p.nx, p.ny);
+  };
+
   // 手势
+  const syncOrbit = (): void => {
+    renderer.setCamera(toRendererCameraState(camera));
+    renderer.setTheme({ ambient, directional, temperature, lightDir });
+    syncLightDisk();
+  };
   const gestureHandlers = {
+    onPan: (dx: number, dy: number): void => {
+      pan(camera, dx, dy, canvas.clientHeight);
+      renderer.setCamera(toRendererCameraState(camera));
+    },
     onOrbit: (dx: number, dy: number): void => {
       orbit(camera, dx, dy);
+      syncOrbit();
+    },
+    onRotate: (radians: number): void => {
+      yaw(camera, radians);
+      syncOrbit();
+    },
+    onTilt: (dy: number): void => {
+      tilt(camera, dy);
       renderer.setCamera(toRendererCameraState(camera));
     },
     onZoom: (factor: number): void => {
@@ -293,7 +328,7 @@ async function bootstrap(): Promise<void> {
     renderer.dispose();
     renderer = next;
     disposeGestures = bindGestures(canvas, gestureHandlers);
-      next.setTheme({ exposure, temperature });
+      next.setTheme({ ambient, directional, temperature, lightDir, propOpacity: mode === 'terrain' ? 0.4 : 1 });
     next.resize(canvas.clientWidth, canvas.clientHeight, window.devicePixelRatio || 1);
     next.syncWorld(world.snapshot());
     next.definePropModels?.(PROP_MODELS);
@@ -302,11 +337,15 @@ async function bootstrap(): Promise<void> {
     showToast(`适配器：${next.name}`);
   };
 
-  bindUI({
-    onModeChange: (m) => { mode = m; },
-    onBlockSelect: (t) => { currentBlockType = t as BlockId; currentPreset = null; currentPropModelId = null; },
-    onPresetSelect: (key) => { currentPreset = key; currentPropModelId = null; },
-    onPropSelect: (modelId) => { currentPropModelId = modelId; currentPreset = null; },
+  lightDisk = bindUI({
+    onModeChange: (m) => {
+      mode = m;
+      renderer.setTheme({ propOpacity: m === 'terrain' ? 0.4 : 1 });
+    },
+    onBlockSelect: (t) => { terrainAction = 'place'; currentBlockType = t as BlockId; },
+    onTerrainRemove: () => { terrainAction = 'remove'; },
+    onPropSelect: (modelId) => { itemAction = 'place'; currentPropModelId = modelId; },
+    onItemRemove: () => { itemAction = 'remove'; },
     onUndo: undo,
     onPerspectiveChange: (distance) => {
       setDistance(camera, distance);
@@ -315,13 +354,21 @@ async function bootstrap(): Promise<void> {
     onAdapterChange: (name) => {
       void switchRenderer(name);
     },
-    onLightingChange: (value) => {
-      exposure = value;
-      renderer.setTheme({ exposure, temperature });
+    onAmbientChange: (value) => {
+      ambient = value;
+      renderer.setTheme({ ambient });
+    },
+    onDirectionalChange: (value) => {
+      directional = value;
+      renderer.setTheme({ directional });
+    },
+    onLightDirChange: (dir) => {
+      lightDir = dir;
+      renderer.setTheme({ lightDir });
     },
     onTemperatureChange: (kelvin) => {
       temperature = kelvin;
-      renderer.setTheme({ exposure, temperature });
+      renderer.setTheme({ temperature });
     },
     onReset: () => {
       world.clear();
@@ -352,6 +399,7 @@ async function bootstrap(): Promise<void> {
       })();
     },
   }, PROP_MODELS);
+  syncLightDisk();
 
   // 自适应
   window.addEventListener('resize', () => {

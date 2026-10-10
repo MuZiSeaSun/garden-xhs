@@ -3,20 +3,28 @@ import { statSync } from 'node:fs';
 import { PROP_MODELS } from '../../src/assets/props.generated';
 
 describe('props.generated', () => {
-  it('has the 12 spec models with names and data-uri icons', () => {
-    expect(PROP_MODELS.length).toBe(12);
+  it('has the imported models with names and data-uri icons', () => {
+    expect(PROP_MODELS.map((m) => m.name)).toEqual([
+      '箭', '箭矢', '木桶', '炸弹', '宝箱', '木箱', '花朵', '高花', '草丛',
+      '树篱', '树篱角', '蘑菇', '盆栽', '石头', '石块', '小树', '松树', '小松树',
+    ]);
     for (const m of PROP_MODELS) {
       expect(m.name.length).toBeGreaterThan(0);
       expect(m.icon.startsWith('data:image/png;base64,')).toBe(true);
     }
   });
 
-  it('geometry is per-face flat-shaded and self-consistent', () => {
+  it('geometry is self-consistent with unit normals', () => {
     for (const m of PROP_MODELS) {
       const n = m.positions.length / 3;
       expect(m.positions.length % 9).toBe(0);            // 每面 3 顶点
       expect(m.normals.length).toBe(m.positions.length);
       expect(m.colors.length).toBe(m.positions.length);
+      expect(m.alpha.length).toBe(m.positions.length / 3);
+      for (let i = 0; i < m.alpha.length; i++) {
+        expect(m.alpha[i]).toBeGreaterThanOrEqual(0);
+        expect(m.alpha[i]).toBeLessThanOrEqual(1);
+      }
       expect(m.indices.length).toBe(n);                   // 拆解后索引 = 顺序
       expect(n).toBeLessThan(65536);
       for (let i = 0; i < m.indices.length; i++) expect(m.indices[i]).toBe(i);

@@ -22,18 +22,17 @@ describe('buildVoxelMesh', () => {
     const m = buildVoxelMesh(w.snapshot());
     expect(m.positions.length / 3).toBe(40);
   });
-  it('emits two quads for a cross block', () => {
-    const m = meshWith(BLOCK.FLOWER_RED);
-    expect(m.positions.length / 3).toBe(8);
-    expect(m.indices.length).toBe(12);
+  it('emits nothing for a retired block id', () => {
+    const m = meshWith(BLOCK.WATER);
+    expect(m.positions.length).toBe(0);
   });
-  it('does not let a cross block cull an adjacent solid face (flowers are non-occluding)', () => {
+  it('does not let a non-opaque leaf cull an adjacent solid face', () => {
     const w = createWorld();
     w.setBlock(0, 0, 0, BLOCK.STONE);
-    w.setBlock(0, 1, 0, BLOCK.FLOWER_RED);
+    w.setBlock(0, 1, 0, BLOCK.LEAF);
     const m = buildVoxelMesh(w.snapshot());
-    // stone keeps all 6 faces (24 verts) + flower 2 quads (8 verts) = 32
-    expect(m.positions.length / 3).toBe(32);
+    // stone keeps 6 faces (24 verts); leaf drops the face against stone (20 verts)
+    expect(m.positions.length / 3).toBe(44);
   });
   it('applies ambient occlusion: a diagonal neighbour darkens the occluded face corners', () => {
     const w = createWorld();

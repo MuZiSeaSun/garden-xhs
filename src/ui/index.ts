@@ -1,45 +1,49 @@
 import { BLOCK } from '../core/block-types';
+import { diskToLightDir } from '../core/light-direction';
+import { DEFAULT_AMBIENT, DEFAULT_DIRECTIONAL } from '../rendering/renderer-api';
 import type { PropModelData } from '../core/prop-types';
 
-export type EditorMode = 'orbit' | 'place' | 'remove';
+export type EditorMode = 'orbit' | 'terrain' | 'item';
 
 export interface UIHandlers {
   onModeChange(mode: EditorMode): void;
   onBlockSelect(type: number): void;
-  onPresetSelect(key: string): void;
+  onTerrainRemove(): void;
   onPropSelect(modelId: number): void;
+  onItemRemove(): void;
   onUndo(): void;
   onReset(): void;
   onSaveAlbum(): void;
   onShareNote(): void;
   onPerspectiveChange(distance: number): void;
   onAdapterChange(name: string): void;
-  onLightingChange(exposure: number): void;
+  onAmbientChange(ambient: number): void;
+  onDirectionalChange(directional: number): void;
+  onLightDirChange(dir: readonly [number, number, number]): void;
   onTemperatureChange(kelvin: number): void;
+}
+
+export interface LightDiskControls {
+  setLightDisk(nx: number, ny: number): void;
+  setViewTheta(theta: number): void;
 }
 
 interface PaletteItem {
   readonly icon: string;
   readonly name: string;
-  readonly type?: number;
-  readonly preset?: string;
+  readonly type: number;
 }
 
 const PALETTE_ITEMS: readonly PaletteItem[] = [
   { icon: '🌱', name: '草地', type: BLOCK.GRASS },
   { icon: '🟫', name: '泥土', type: BLOCK.SOIL },
-  { icon: '⬜', name: '石头', type: BLOCK.STONE },
-  { icon: '💧', name: '水',   type: BLOCK.WATER },
-  { icon: '🌹', name: '红花', type: BLOCK.FLOWER_RED },
-  { icon: '🌻', name: '黄花', type: BLOCK.FLOWER_YELLOW },
-  { icon: '🌿', name: '灌木', type: BLOCK.BUSH },
-  { icon: '🌳', name: '小树', preset: 'tree' },
-  { icon: '💐', name: '花丛', preset: 'flowerBed' },
+  { icon: '⬜', name: '岩石', type: BLOCK.STONE },
+  { icon: '🍃', name: '树叶', type: BLOCK.LEAF },
 ];
 
-export function bindUI(handlers: UIHandlers, propModels: readonly PropModelData[]): void {
+export function bindUI(handlers: UIHandlers, propModels: readonly PropModelData[]): LightDiskControls {
   const root = document.getElementById('ui-root');
-  if (!root) return;
+  if (!root) return { setLightDisk() {}, setViewTheta() {} };
 
   const modeGroup = document.createElement('div');
   modeGroup.className = 'mode-group';
@@ -48,14 +52,25 @@ export function bindUI(handlers: UIHandlers, propModels: readonly PropModelData[
   palette.className = 'palette';
   palette.style.display = 'none';
 
-  (['orbit', 'place', 'remove'] as const).forEach((mode, i) => {
+  const blocksGroup = document.createElement('div');
+  blocksGroup.className = 'palette-group terrain-group';
+  const propsGroup = document.createElement('div');
+  propsGroup.className = 'palette-group props-group';
+
+  const showPalette = (mode: EditorMode): void => {
+    palette.style.display = mode === 'orbit' ? 'none' : '';
+    blocksGroup.style.display = mode === 'terrain' ? '' : 'none';
+    propsGroup.style.display = mode === 'item' ? '' : 'none';
+  };
+
+  (['orbit', 'terrain', 'item'] as const).forEach((mode, i) => {
     const btn = document.createElement('button');
     btn.className = 'mode-btn' + (i === 0 ? ' active' : '');
-    btn.textContent = mode === 'orbit' ? '旋转' : mode === 'place' ? '放置' : '删除';
+    btn.textContent = mode === 'orbit' ? '旋转' : mode === 'terrain' ? '地形' : '物品';
     btn.addEventListener('click', () => {
       modeGroup.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
-      palette.style.display = mode === 'place' ? '' : 'none';
+      showPalette(mode);
       handlers.onModeChange(mode);
     });
     modeGroup.appendChild(btn);
@@ -65,8 +80,16 @@ export function bindUI(handlers: UIHandlers, propModels: readonly PropModelData[
     palette.querySelectorAll('.palette-item').forEach((b) => b.classList.remove('active'));
   };
 
-  const blocksGroup = document.createElement('div');
-  blocksGroup.className = 'palette-group';
+  const shovel = document.createElement('button');
+  shovel.className = 'palette-item';
+  shovel.textContent = '🪣';
+  shovel.title = '铲子';
+  shovel.addEventListener('click', () => {
+    clearActive();
+    shovel.classList.add('active');
+    handlers.onTerrainRemove();
+  });
+  blocksGroup.appendChild(shovel);
   PALETTE_ITEMS.forEach((item) => {
     const btn = document.createElement('button');
     btn.className = 'palette-item';
@@ -75,18 +98,21 @@ export function bindUI(handlers: UIHandlers, propModels: readonly PropModelData[
     btn.addEventListener('click', () => {
       clearActive();
       btn.classList.add('active');
-      if (item.type !== undefined) handlers.onBlockSelect(item.type);
-      if (item.preset) handlers.onPresetSelect(item.preset);
+      handlers.onBlockSelect(item.type);
     });
     blocksGroup.appendChild(btn);
   });
 
-  const propsGroup = document.createElement('div');
-  propsGroup.className = 'palette-group props-group';
-  const label = document.createElement('span');
-  label.className = 'palette-group-label';
-  label.textContent = '模型';
-  propsGroup.appendChild(label);
+  const itemRemove = document.createElement('button');
+  itemRemove.className = 'palette-item';
+  itemRemove.textContent = '🗑️';
+  itemRemove.title = '删除';
+  itemRemove.addEventListener('click', () => {
+    clearActive();
+    itemRemove.classList.add('active');
+    handlers.onItemRemove();
+  });
+  propsGroup.appendChild(itemRemove);
   propModels.forEach((m, modelId) => {
     const btn = document.createElement('button');
     btn.className = 'palette-item';
@@ -160,26 +186,71 @@ export function bindUI(handlers: UIHandlers, propModels: readonly PropModelData[
   adapterRow.appendChild(aLabel);
   adapterRow.appendChild(select);
 
-  const lightRow = document.createElement('div');
-  lightRow.className = 'control-row lighting';
-  const lLabel = document.createElement('span');
-  lLabel.textContent = '光照';
-  const lSlider = document.createElement('input');
-  lSlider.type = 'range';
-  lSlider.min = '0.5';
-  lSlider.max = '2';
-  lSlider.step = '0.1';
-  lSlider.value = '1.3';
-  const lValue = document.createElement('span');
-  lValue.className = 'lighting-value';
-  lValue.textContent = lSlider.value;
-  lSlider.addEventListener('input', () => {
-    lValue.textContent = lSlider.value;
-    handlers.onLightingChange(Number(lSlider.value));
+  const intensityRow = (className: string, label: string, initial: number, onChange: (value: number) => void): HTMLDivElement => {
+    const row = document.createElement('div');
+    row.className = `control-row ${className}`;
+    const name = document.createElement('span');
+    name.textContent = label;
+    const slider = document.createElement('input');
+    slider.type = 'range';
+    slider.min = '0';
+    slider.max = '2';
+    slider.step = '0.02';
+    slider.value = String(initial);
+    const value = document.createElement('span');
+    value.className = 'lighting-value';
+    value.textContent = initial.toFixed(2);
+    slider.addEventListener('input', () => {
+      const next = Number(slider.value);
+      value.textContent = next.toFixed(2);
+      onChange(next);
+    });
+    row.appendChild(name);
+    row.appendChild(slider);
+    row.appendChild(value);
+    return row;
+  };
+  const ambientRow = intensityRow('ambient', '环境光', DEFAULT_AMBIENT, (value) => handlers.onAmbientChange(value));
+  const directionalRow = intensityRow('directional', '方向光', DEFAULT_DIRECTIONAL, (value) => handlers.onDirectionalChange(value));
+
+  const angleRow = document.createElement('div');
+  angleRow.className = 'control-row light-angle';
+  const angleLabel = document.createElement('span');
+  angleLabel.textContent = '角度';
+  const disk = document.createElement('div');
+  disk.className = 'light-disk';
+  const knob = document.createElement('div');
+  knob.className = 'light-disk-knob';
+  disk.appendChild(knob);
+  let viewTheta = Math.PI / 4;
+  const placeKnob = (nx: number, ny: number): void => {
+    knob.style.left = `${(nx + 1) * 50}%`;
+    knob.style.top = `${(ny + 1) * 50}%`;
+  };
+  const pointFromEvent = (e: PointerEvent): { nx: number; ny: number } => {
+    const rect = disk.getBoundingClientRect();
+    let nx = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    let ny = ((e.clientY - rect.top) / rect.height) * 2 - 1;
+    const len = Math.hypot(nx, ny);
+    if (len > 1) { nx /= len; ny /= len; }
+    return { nx, ny };
+  };
+  const drag = (e: PointerEvent): void => {
+    const { nx, ny } = pointFromEvent(e);
+    placeKnob(nx, ny);
+    handlers.onLightDirChange(diskToLightDir(nx, ny, viewTheta));
+  };
+    disk.addEventListener('pointerdown', (e) => {
+      if (typeof e.pointerId === 'number') disk.setPointerCapture?.(e.pointerId);
+      drag(e);
+    });
+  disk.addEventListener('pointermove', (e) => {
+    if (!disk.hasPointerCapture?.(e.pointerId)) return;
+    drag(e);
   });
-  lightRow.appendChild(lLabel);
-  lightRow.appendChild(lSlider);
-  lightRow.appendChild(lValue);
+  placeKnob(0, 0);
+  angleRow.appendChild(angleLabel);
+  angleRow.appendChild(disk);
 
   const tempRow = document.createElement('div');
   tempRow.className = 'control-row temperature';
@@ -202,11 +273,35 @@ export function bindUI(handlers: UIHandlers, propModels: readonly PropModelData[
   tempRow.appendChild(tSlider);
   tempRow.appendChild(tValue);
 
+  const debugBar = document.createElement('div');
+  debugBar.className = 'debug-bar';
+  const debugBtn = document.createElement('button');
+  debugBtn.type = 'button';
+  debugBtn.className = 'debug-toggle';
+  debugBtn.textContent = '调试';
+  const debugPanel = document.createElement('div');
+  debugPanel.className = 'debug-panel';
+  debugPanel.hidden = true;
+  debugPanel.appendChild(perspective);
+  debugPanel.appendChild(adapterRow);
+  debugPanel.appendChild(ambientRow);
+  debugPanel.appendChild(directionalRow);
+  debugPanel.appendChild(angleRow);
+  debugPanel.appendChild(tempRow);
+  debugBtn.addEventListener('click', () => {
+    const open = debugPanel.hidden;
+    debugPanel.hidden = !open;
+    debugBtn.classList.toggle('active', open);
+  });
+  debugBar.appendChild(debugBtn);
+  debugBar.appendChild(debugPanel);
+
+  root.appendChild(debugBar);
   root.appendChild(modeGroup);
   root.appendChild(palette);
   root.appendChild(actions);
-  root.appendChild(perspective);
-  root.appendChild(adapterRow);
-  root.appendChild(lightRow);
-  root.appendChild(tempRow);
+  return {
+    setLightDisk: placeKnob,
+    setViewTheta: (theta) => { viewTheta = theta; },
+  };
 }

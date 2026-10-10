@@ -208,6 +208,39 @@ function concatU8(parts: Uint8Array[]): Uint8Array {
   return out;
 }
 
+/** 面法线夹角不超过这个值就平均到重合顶点上；更钝的折痕保持硬边。 */
+const SMOOTH_ANGLE_DOT = Math.cos(60 * Math.PI / 180);
+
+function smoothNormals(pos: number[], nrm: number[]): void {
+  const groups = new Map<string, number[]>();
+  const count = pos.length / 3;
+  for (let i = 0; i < count; i++) {
+    const key = `${pos[i * 3]},${pos[i * 3 + 1]},${pos[i * 3 + 2]}`;
+    const list = groups.get(key);
+    if (list) list.push(i);
+    else groups.set(key, [i]);
+  }
+  const out = nrm.slice();
+  for (const ids of groups.values()) {
+    if (ids.length < 2) continue;
+    for (const i of ids) {
+      const ix = i * 3;
+      const nix = nrm[ix], niy = nrm[ix + 1], niz = nrm[ix + 2];
+      let sx = 0, sy = 0, sz = 0;
+      for (const j of ids) {
+        const jx = j * 3;
+        const dot = nix * nrm[jx] + niy * nrm[jx + 1] + niz * nrm[jx + 2];
+        if (dot >= SMOOTH_ANGLE_DOT) {
+          sx += nrm[jx]; sy += nrm[jx + 1]; sz += nrm[jx + 2];
+        }
+      }
+      const sl = Math.hypot(sx, sy, sz) || 1;
+      out[ix] = sx / sl; out[ix + 1] = sy / sl; out[ix + 2] = sz / sl;
+    }
+  }
+  for (let i = 0; i < nrm.length; i++) nrm[i] = out[i];
+}
+
 export type BakedModel = PropModelData;
 
 export function bakeModel(
@@ -223,19 +256,21 @@ export function bakeModel(
     minZ = Math.min(minZ, raw.positions[i + 2]); maxZ = Math.max(maxZ, raw.positions[i + 2]);
   }
   const scale = size / Math.max(maxX - minX, maxZ - minZ, 1e-9);
-  const positions = new Float32Array(tris * 9);
-  const normals = new Float32Array(tris * 9);
-  const colors = new Float32Array(tris * 9);
+  const pos: number[] = [];
+  const nrm: number[] = [];
+  const col: number[] = [];
+  const alp: number[] = [];
   for (let t = 0; t < tris; t++) {
     const ia = raw.indices[t * 3], ib = raw.indices[t * 3 + 1], ic = raw.indices[t * 3 + 2];
     const ax = raw.positions[ia * 3], ay = raw.positions[ia * 3 + 1], az = raw.positions[ia * 3 + 2];
     const bx = raw.positions[ib * 3], by = raw.positions[ib * 3 + 1], bz = raw.positions[ib * 3 + 2];
     const cx = raw.positions[ic * 3], cy = raw.positions[ic * 3 + 1], cz = raw.positions[ic * 3 + 2];
-    // 平面法线 = 面叉积归一化（实测顶点跨面共享、NORMAL 为平滑法线，不采用）
+    // 先写面法线；写完后按夹角平均到重合顶点（源 NORMAL 是整模平滑，箱子的直角也会被抹掉）
     let nx = (by - ay) * (cz - az) - (bz - az) * (cy - ay);
     let ny = (bz - az) * (cx - ax) - (bx - ax) * (cz - az);
     let nz = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
-    const nl = Math.hypot(nx, ny, nz) || 1;
+    const nl = Math.hypot(nx, ny, nz);
+    if (nl < 1e-8) continue; // 零面积面无法给出法线（chest 有 1 个）
     nx /= nl; ny /= nl; nz /= nl;
     // 面中心 UV → colormap 最近纹素（glTF UV 左上原点、v 向下，PNG 行序自上而下，无需 flip）
     const u = (raw.uvs[ia * 2] + raw.uvs[ib * 2] + raw.uvs[ic * 2]) / 3;
@@ -244,42 +279,53 @@ export function bakeModel(
     const py = Math.min(tex.height - 1, Math.max(0, Math.round(v * (tex.height - 1))));
     const ti = (py * tex.width + px) * 4;
     const r = tex.rgba[ti] / 255, g = tex.rgba[ti + 1] / 255, b = tex.rgba[ti + 2] / 255;
+    const a = tex.rgba[ti + 3] / 255;
     for (let k = 0; k < 3; k++) {
       const vi = raw.indices[t * 3 + k];
       const ox = raw.positions[vi * 3], oy = raw.positions[vi * 3 + 1], oz = raw.positions[vi * 3 + 2];
-      const o = t * 9 + k * 3;
       // 缩放 → 水平居中（模型中心移到 footprint 区域中心）、底面归零
-      positions[o] = (ox - (minX + maxX) / 2) * scale;
-      positions[o + 1] = (oy - minY) * scale;
-      positions[o + 2] = (oz - (minZ + maxZ) / 2) * scale;
-      normals[o] = nx; normals[o + 1] = ny; normals[o + 2] = nz;
-      colors[o] = r; colors[o + 1] = g; colors[o + 2] = b;
+      pos.push((ox - (minX + maxX) / 2) * scale, (oy - minY) * scale, (oz - (minZ + maxZ) / 2) * scale);
+      nrm.push(nx, ny, nz);
+      col.push(r, g, b);
+      alp.push(a);
     }
   }
+  if (pos.length === 0) throw new Error(`${name}: no triangles`);
+  smoothNormals(pos, nrm);
+  const positions = new Float32Array(pos);
+  const normals = new Float32Array(nrm);
+  const colors = new Float32Array(col);
+  const alpha = new Float32Array(alp);
   const spanX = (maxX - minX) * scale, spanY = (maxY - minY) * scale, spanZ = (maxZ - minZ) * scale;
   const footprint = Math.max(1, Math.ceil(spanX - 1e-9), Math.ceil(spanZ - 1e-9));
   const height = Math.max(1, Math.ceil(spanY - 1e-9));
-  const indices = new Uint16Array(tris * 3);
+  const indices = new Uint16Array(positions.length / 3);
   for (let i = 0; i < indices.length; i++) indices[i] = i;
   if (indices.length > 65535) throw new Error(`${name}: too many vertices for Uint16`);
-  return { name, icon, positions, normals, colors, indices, footprint, height };
+  return { name, icon, positions, normals, colors, alpha, indices, footprint, height };
 }
 
-// ---- 模型清单（spec §12.1 已核实 12 个；size = 目标水平最大边，格）----
+// ---- 模型清单（size = 目标水平最大边，格；略小于 1 时占地保持 1 格）----
 const KIT = 'D:/Documents/lzx/assets/platformer-kit';
 const SPECS: ReadonlyArray<{ file: string; name: string; size: number }> = [
-  { file: 'tree', name: '小树', size: 0.92 },
-  { file: 'crate', name: '木箱', size: 0.92 },
+  { file: 'arrow', name: '箭', size: 0.5 },
+  { file: 'arrows', name: '箭矢', size: 0.55 },
   { file: 'barrel', name: '木桶', size: 0.85 },
+  { file: 'bomb', name: '炸弹', size: 0.7 },
+  { file: 'chest', name: '宝箱', size: 0.9 },
+  { file: 'crate', name: '木箱', size: 0.92 },
+  { file: 'flowers', name: '花朵', size: 0.9 },
+  { file: 'flowers-tall', name: '高花', size: 0.85 },
+  { file: 'grass', name: '草丛', size: 0.75 },
+  { file: 'hedge', name: '树篱', size: 0.98 },
+  { file: 'hedge-corner', name: '树篱角', size: 0.98 },
   { file: 'mushrooms', name: '蘑菇', size: 0.9 },
-  { file: 'rocks', name: '石头', size: 0.9 },
   { file: 'plant', name: '盆栽', size: 0.9 },
-  { file: 'fence-straight', name: '栅栏', size: 0.98 },
-  { file: 'sign', name: '木牌', size: 0.75 },
-  { file: 'flag', name: '旗帜', size: 0.9 },
-  { file: 'coin-gold', name: '金币', size: 0.5 },
-  { file: 'spring', name: '弹簧', size: 0.85 },
-  { file: 'platform', name: '平台', size: 1.9 },
+  { file: 'rocks', name: '石头', size: 0.9 },
+  { file: 'stones', name: '石块', size: 0.9 },
+  { file: 'tree', name: '小树', size: 0.92 },
+  { file: 'tree-pine', name: '松树', size: 0.92 },
+  { file: 'tree-pine-small', name: '小松树', size: 0.62 },
 ];
 
 export function assertPng64(bytes: Uint8Array, label: string): void {
@@ -297,6 +343,7 @@ export function serializeModels(models: readonly BakedModel[]): string {
     `    positions: f32(${JSON.stringify(b64(m.positions))}),\n` +
     `    normals: f32(${JSON.stringify(b64(m.normals))}),\n` +
     `    colors: f32(${JSON.stringify(b64(m.colors))}),\n` +
+    `    alpha: f32(${JSON.stringify(b64(m.alpha))}),\n` +
     `    indices: u16(${JSON.stringify(b64(m.indices))}),\n` +
     `    footprint: ${m.footprint},\n    height: ${m.height},\n  },`,
   ).join('\n');

@@ -2,6 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   createCameraOrbit,
   orbit,
+  yaw,
+  tilt,
+  pan,
   zoom,
   fitViewport,
   setDistance,
@@ -21,6 +24,49 @@ describe('camera-state', () => {
     orbit(c, 50, 100000);
     expect(c.phi).toBe(phi0);
     expect(c.theta).toBeCloseTo(theta0 + 0.5);
+  });
+  it('yaws by the given radians without changing elevation or target', () => {
+    const c = createCameraOrbit();
+    const phi0 = c.phi;
+    const target = [...c.target];
+    yaw(c, Math.PI / 2);
+    expect(c.phi).toBe(phi0);
+    expect(c.theta).toBeCloseTo(Math.PI / 4 + Math.PI / 2);
+    expect(c.target).toEqual(target);
+  });
+  it('tilts elevation within 10 degrees of the isometric default', () => {
+    const c = createCameraOrbit();
+    const elevation = (): number => Math.PI / 2 - c.phi;
+    const e0 = elevation();
+    const theta = c.theta;
+    const perPx = (10 * Math.PI / 180) / 120;
+    tilt(c, 60);
+    expect(elevation()).toBeCloseTo(e0 + 60 * perPx);
+    expect(c.theta).toBe(theta);
+    tilt(c, 1e6);
+    expect(elevation()).toBeCloseTo(e0 + 10 * Math.PI / 180);
+    const up = createCameraOrbit();
+    tilt(up, -1e6);
+    expect(Math.PI / 2 - up.phi).toBeCloseTo(e0 - 10 * Math.PI / 180);
+  });
+  it('pans the island with the pointer on the ground plane', () => {
+    const c = createCameraOrbit();
+    c.theta = Math.PI / 2; // camera on +Z, screen-right is +X, screen-up is -Z
+    const y0 = c.target[1];
+    const half = c.radius * Math.tan(c.fov / 2);
+    pan(c, 100, 0, 200);
+    expect(c.target[0]).toBeCloseTo(5 - (2 * half / 200) * 100);
+    expect(c.target[2]).toBeCloseTo(5);
+    expect(c.target[1]).toBe(y0);
+    pan(c, 0, 50, 200);
+    expect(c.target[2]).toBeCloseTo(5 - (2 * half / 200) * 50);
+  });
+  it('keeps the look target within reach of the island', () => {
+    const c = createCameraOrbit();
+    c.theta = Math.PI / 2;
+    pan(c, 1e6, 0, 10);
+    expect(c.target[0]).toBe(-35);
+    expect(c.target[2]).toBeCloseTo(5);
   });
   it('uses a mild fov from a moderately far camera for slight perspective', () => {
     const c = createCameraOrbit();

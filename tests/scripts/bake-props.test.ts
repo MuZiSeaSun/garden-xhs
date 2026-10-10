@@ -212,6 +212,7 @@ describe('bakeModel', () => {
     expect(Array.from(m.positions)).toEqual([-0.25, 0, -0.25, 0.25, 0, -0.25, -0.25, 0, 0.25]);
     expect(Array.from(m.normals)).toEqual([0, -1, 0, 0, -1, 0, 0, -1, 0]);
     expect(Array.from(m.colors)).toEqual([0, 1, 0, 0, 1, 0, 0, 1, 0]);
+    expect(Array.from(m.alpha)).toEqual([1, 1, 1]);
     expect(Array.from(m.indices)).toEqual([0, 1, 2]);
     expect(m.footprint).toBe(1);
     expect(m.height).toBe(1);
@@ -230,5 +231,52 @@ describe('bakeModel', () => {
     expect(m.footprint).toBe(2);
     expect(m.height).toBe(2);
     expect(m.positions.length).toBe(36 * 3); // 8 共享顶点 → 拆解后 12 面 × 3
+  });
+
+  function groupsOf(m: { positions: Float32Array; normals: Float32Array }): number[][][] {
+    const map = new Map<string, number[][]>();
+    for (let i = 0; i < m.positions.length; i += 3) {
+      const key = `${m.positions[i]},${m.positions[i + 1]},${m.positions[i + 2]}`;
+      const n = [m.normals[i], m.normals[i + 1], m.normals[i + 2]];
+      const list = map.get(key);
+      if (list) list.push(n);
+      else map.set(key, [n]);
+    }
+    return [...map.values()];
+  }
+
+  it('averages normals across a shallow crease and keeps a right-angle crease', () => {
+    const uv = new Float32Array(8).fill(0.8);
+    const shallow = bakeModel('s', '', {
+      positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0.5, Math.sqrt(3) / 2]),
+      uvs: uv, indices: new Uint32Array([0, 1, 2, 0, 1, 3]),
+    }, TEX, 1);
+    const shared = groupsOf(shallow).filter((g) => g.length === 2);
+    const alone = groupsOf(shallow).filter((g) => g.length === 1);
+    expect(shared).toHaveLength(2);
+    const avg = [0, -1 - Math.sqrt(3) / 2, 0.5];
+    const al = Math.hypot(avg[0], avg[1], avg[2]);
+    for (const pair of shared) {
+      for (const n of pair) {
+        expect(n[0]).toBeCloseTo(avg[0] / al, 5);
+        expect(n[1]).toBeCloseTo(avg[1] / al, 5);
+        expect(n[2]).toBeCloseTo(avg[2] / al, 5);
+      }
+    }
+    const flat = alone.find((g) => Math.abs(g[0][1] + 1) < 1e-5);
+    const tilted = alone.find((g) => Math.abs(g[0][2] - 0.5) < 1e-5);
+    expect(flat?.[0]).toEqual([0, -1, 0]);
+    expect(tilted?.[0][0]).toBeCloseTo(0, 5);
+    expect(tilted?.[0][1]).toBeCloseTo(-Math.sqrt(3) / 2, 5);
+    expect(tilted?.[0][2]).toBeCloseTo(0.5, 5);
+
+    const crease = bakeModel('c', '', {
+      positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0]),
+      uvs: uv, indices: new Uint32Array([0, 1, 2, 0, 1, 3]),
+    }, TEX, 1);
+    for (const pair of groupsOf(crease).filter((g) => g.length === 2)) {
+      const dots = pair.map((n) => [n[0], n[1], n[2]].join(','));
+      expect(new Set(dots)).toEqual(new Set(['0,-1,0', '0,0,1']));
+    }
   });
 });

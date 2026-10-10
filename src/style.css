@@ -20,7 +20,7 @@ body {
 #ui-root {
   position: fixed;
   left: 0; right: 0; bottom: 0;
-  padding: 8px 12px 16px;
+  padding: 8px 12px 50px;
   display: flex;
   flex-direction: column;
   pointer-events: none;
@@ -33,7 +33,7 @@ body {
   justify-content: center;
 }
 .mode-group > * + * { margin-left: 6px; }
-.mode-btn, .palette-item, .actions button {
+.mode-btn, .palette-item, .actions button, .debug-toggle {
   border: none;
   border-radius: 20px;
   background: rgba(255,255,255,0.85);
@@ -42,7 +42,7 @@ body {
   color: #333;
   box-shadow: 0 1px 4px rgba(0,0,0,0.1);
 }
-.mode-btn.active, .palette-item.active {
+.mode-btn.active, .palette-item.active, .debug-toggle.active {
   background: #ff2442;
   color: #fff;
 }
@@ -102,8 +102,27 @@ body {
   background: #fff;
   color: #333;
 }
+.light-disk {
+  position: relative;
+  width: 88px;
+  height: 88px;
+  border-radius: 50%;
+  background: #fff;
+  border: 1px solid #ccc;
+  touch-action: none;
+}
+.light-disk-knob {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  margin-left: -7px;
+  margin-top: -7px;
+  border-radius: 50%;
+  background: #e23d3d;
+  pointer-events: none;
+}
 .lighting-value {
-  min-width: 28px;
+  min-width: 36px;
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
@@ -148,3 +167,30 @@ body {
   margin-right: 4px;
 }
 .palette-item img { width: 30px; height: 30px; display: block; pointer-events: none; }
+
+.debug-bar {
+  position: fixed;
+  /* 容器会注入 --safe-area-inset-top；没有时至少留 100px，避免顶到状态栏 */
+  top: 108px;
+  top: calc(8px + max(100px, var(--safe-area-inset-top, env(safe-area-inset-top, 0px))));
+  left: 12px;
+  right: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  pointer-events: none;
+  z-index: 2;
+}
+#ui-root > .debug-bar { pointer-events: none; }
+.debug-bar > * { pointer-events: auto; }
+.debug-panel {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  background: rgba(255, 255, 255, 0.85);
+  border-radius: 12px;
+  padding: 8px 12px;
+}
+.debug-panel[hidden] { display: none; }
+.debug-panel > * + * { margin-top: 8px; }
