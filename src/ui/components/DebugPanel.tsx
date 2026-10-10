@@ -1,9 +1,16 @@
 import { useState } from 'react';
+import { Button, Card, Select } from 'animal-island-ui';
 import { useEditorSelector, useEngine } from '../EngineContext';
 import { LightDisk } from './LightDisk';
 
 const PERSPECTIVE_MIN = 60;
 const PERSPECTIVE_MAX = 500;
+
+const ADAPTER_OPTIONS = [
+  { key: 'auto', label: '自动' },
+  { key: 'three', label: 'Three' },
+  { key: 'webgl', label: 'WebGL' },
+];
 
 export function DebugPanel() {
   const engine = useEngine();
@@ -18,15 +25,16 @@ export function DebugPanel() {
 
   return (
     <div className="debug-bar">
-      <button
-        type="button"
-        className={'debug-toggle' + (open ? ' active' : '')}
+      <Button
+        size="small"
+        type={open ? 'primary' : 'default'}
+        aria-pressed={open}
         onClick={() => setOpen((v) => !v)}
-      >调试</button>
+      >调试</Button>
       {open && (
-        <div className="debug-panel">
+        <Card className="debug-panel">
           <div className="perspective">
-            <span className="perspective-label">透视</span>
+            <span>透视</span>
             <input
               type="range"
               min={PERSPECTIVE_MIN} max={PERSPECTIVE_MAX} step={10}
@@ -38,11 +46,7 @@ export function DebugPanel() {
 
           <div className="control-row">
             <span>适配器</span>
-            <select className="adapter-select" value={adapter} onChange={(e) => engine.switchAdapter(e.target.value)}>
-              <option value="auto">自动</option>
-              <option value="three">Three</option>
-              <option value="webgl">WebGL</option>
-            </select>
+            <Select value={adapter} onChange={(key) => engine.switchAdapter(key)} options={ADAPTER_OPTIONS} />
           </div>
 
           <div className="control-row ambient">
@@ -76,7 +80,7 @@ export function DebugPanel() {
             />
             <span className="lighting-value">{temperature}K</span>
           </div>
-        </div>
+        </Card>
       )}
     </div>
   );

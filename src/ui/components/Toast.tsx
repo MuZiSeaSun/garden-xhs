@@ -13,5 +13,6 @@ export function Toast() {
   }, [toast]);
 
   if (!toast || !visible) return null;
-  return <div id="toast">{toast.message}</div>;
+  const top = toast.place === 'top';
+  return <div id="toast" className={top ? 'toast-top' : undefined}>{toast.message}</div>;
 }

@@ -1,0 +1,95 @@
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+@font-face {
+  font-family: 'Noto Sans SC';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../../fonts/noto-sans-sc-400.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Noto Sans SC';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('../../fonts/noto-sans-sc-500.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Noto Sans SC';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('../../fonts/noto-sans-sc-700.woff2') format('woff2');
+}
+
+*,
+*::before,
+*::after {
+  -webkit-tap-highlight-color: transparent;
+}
+
+html {
+  -webkit-touch-callout: none;
+}
+
+#root {
+  min-height: 100%;
+}
+
+.page {
+  max-width: 560px;
+  margin: 0 auto;
+  padding: 24px 16px calc(48px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  display: flex;
+  flex-direction: column;
+}
+
+.page > * {
+  margin-top: 16px;
+}
+
+.label {
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
+.line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.line + .line {
+  margin-top: 12px;
+}
+
+.k {
+  font-weight: 700;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.row > * {
+  margin: 0 8px 8px 0;
+}
+
+.range {
+  flex: 1;
+  margin: 0 8px;
+  min-width: 0;
+}
+
+.val {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}

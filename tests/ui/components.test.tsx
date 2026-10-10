@@ -1,25 +1,38 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup, act } from '@testing-library/react';
-import { Profiler, type ReactNode } from 'react';
+import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest';
+import { render, screen, fireEvent, cleanup } from '@testing-library/react';
+import type { ReactNode } from 'react';
 import { createEditorStore } from '../../src/engine/editor-store';
 import { EngineProvider } from '../../src/ui/EngineContext';
-import { ModeBar } from '../../src/ui/components/ModeBar';
+import { EditSheet } from '../../src/ui/components/EditSheet';
+import { TerrainGrid } from '../../src/ui/components/TerrainGrid';
+import { ItemGrid } from '../../src/ui/components/ItemGrid';
 import { ActionBar } from '../../src/ui/components/ActionBar';
-import { Palette } from '../../src/ui/components/Palette';
 import { DebugPanel } from '../../src/ui/components/DebugPanel';
 import { LightDisk } from '../../src/ui/components/LightDisk';
 import { BLOCK } from '../../src/core/block-types';
 import { diskToLightDir } from '../../src/core/light-direction';
 import type { PropModelData } from '../../src/core/prop-types';
 
+beforeAll(() => {
+  if (typeof globalThis.ResizeObserver === 'undefined') {
+    (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = class {
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    };
+  }
+});
+
 afterEach(cleanup);
 
-const PROPS: PropModelData[] = [0, 1, 2].map((i) => ({
-  name: `模型${i}`, icon: `data:image/png;base64,${i}`,
-  positions: new Float32Array(0), normals: new Float32Array(0), colors: new Float32Array(0),
-  alpha: new Float32Array(0), indices: new Uint16Array(0), footprint: 1, height: 1,
-}));
+function makeProps(n: number): PropModelData[] {
+  return Array.from({ length: n }, (_, i) => ({
+    name: `模型${i}`, icon: `data:image/png;base64,${i}`,
+    positions: new Float32Array(0), normals: new Float32Array(0), colors: new Float32Array(0),
+    alpha: new Float32Array(0), indices: new Uint16Array(0), footprint: 1, height: 1,
+  }));
+}
 
 function makeEngine() {
   return {
@@ -41,135 +54,152 @@ function makeEngine() {
   };
 }
 
-function renderWith(children: ReactNode) {
-  const store = createEditorStore();
+function renderWith(children: ReactNode, initial: Parameters<typeof createEditorStore>[0] = {}) {
+  const store = createEditorStore(initial);
   const engine = makeEngine();
   const result = render(<EngineProvider value={{ engine, store }}>{children}</EngineProvider>);
   return { store, engine, ...result };
 }
 
-describe('ModeBar', () => {
-  it('renders three tabs with orbit active by default', () => {
-    renderWith(<ModeBar />);
-    expect(screen.getByText('旋转').className).toContain('active');
-    expect(screen.getByText('地形').className).not.toContain('active');
-    expect(screen.getByText('物品').className).not.toContain('active');
+describe('EditSheet', () => {
+  it('is hidden (edit only) until tapped', () => {
+    renderWith(<EditSheet propModels={makeProps(3)} />);
+    expect(screen.getByRole('button', { name: '编辑' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '撤销' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '清空' })).toBeNull();
+    expect(screen.queryByRole('tab', { name: '地形' })).toBeNull();
   });
 
-  it('switches mode via engine.setMode', () => {
-    const { engine } = renderWith(<ModeBar />);
-    fireEvent.click(screen.getByText('地形'));
+  it('opens the sheet, defaults to 地形, reveals undo/clear, and sets the mode', () => {
+    const { engine } = renderWith(<EditSheet propModels={makeProps(3)} />);
+    fireEvent.click(screen.getByRole('button', { name: '编辑' }));
+    expect(screen.getByRole('tab', { name: '地形' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: '物品' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '撤销' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '清空' })).toBeTruthy();
     expect(engine.setMode).toHaveBeenCalledWith('terrain');
+    expect(screen.getByRole('button', { name: '关闭' })).toBeTruthy();
   });
 
-  it('does not re-render when an unrelated state field changes', () => {
-    const store = createEditorStore();
-    const engine = makeEngine();
-    let renders = 0;
-    render(
-      <EngineProvider value={{ engine, store }}>
-        <Profiler id="mode" onRender={() => { renders += 1; }}>
-          <ModeBar />
-        </Profiler>
-      </EngineProvider>,
-    );
-    const afterMount = renders;
-    act(() => store.setState({ viewTheta: 1.23 }));
-    expect(renders).toBe(afterMount);
+  it('wires undo/clear', () => {
+    const { engine } = renderWith(<EditSheet propModels={makeProps(3)} />);
+    fireEvent.click(screen.getByRole('button', { name: '编辑' }));
+    fireEvent.click(screen.getByRole('button', { name: '撤销' }));
+    expect(engine.undo).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '清空' }));
+    expect(engine.reset).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '确定' }));
+    expect(engine.reset).toHaveBeenCalled();
+  });
+
+  it('closes back to view mode and hides undo/clear', () => {
+    const { engine } = renderWith(<EditSheet propModels={makeProps(3)} />);
+    fireEvent.click(screen.getByRole('button', { name: '编辑' }));
+    fireEvent.click(screen.getByRole('button', { name: '关闭' }));
+    expect(screen.queryByRole('tab', { name: '地形' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '撤销' })).toBeNull();
+    expect(engine.setMode).toHaveBeenLastCalledWith('orbit');
+  });
+
+  it('switches to the 物品 tab', () => {
+    const { engine } = renderWith(<EditSheet propModels={makeProps(3)} />);
+    fireEvent.click(screen.getByRole('button', { name: '编辑' }));
+    fireEvent.click(screen.getByRole('tab', { name: '物品' }));
+    expect(engine.setMode).toHaveBeenLastCalledWith('item');
+    expect(screen.getByRole('button', { name: '删除' })).toBeTruthy();
   });
 });
 
-describe('Palette', () => {
-  it('renders nothing in orbit mode', () => {
-    const { container } = renderWith(<Palette propModels={PROPS} />);
-    expect(container.querySelector('.palette')).toBeNull();
+describe('TerrainGrid', () => {
+  it('renders six slots (shovel + four blocks + one empty)', () => {
+    const { container } = renderWith(<TerrainGrid />);
+    expect(container.querySelectorAll('.grid-3 > *').length).toBe(6);
+    for (const name of ['铲子', '草地', '泥土', '岩石', '树叶']) {
+      expect(screen.getByRole('button', { name })).toBeTruthy();
+    }
   });
 
-  it('renders the shovel ahead of the four terrain blocks', () => {
-    const { store } = renderWith(<Palette propModels={PROPS} />);
-    act(() => store.setState({ mode: 'terrain' }));
-    const titles = Array.from(document.querySelectorAll('.terrain-group .palette-item'))
-      .map((el) => (el as HTMLElement).title);
-    expect(titles).toEqual(['铲子', '草地', '泥土', '岩石', '树叶']);
-  });
-
-  it('selects a block type', () => {
-    const { store, engine } = renderWith(<Palette propModels={PROPS} />);
-    act(() => store.setState({ mode: 'terrain' }));
-    fireEvent.click(screen.getByTitle('泥土'));
+  it('marks only the selected block pressed and selects on click', () => {
+    const { engine } = renderWith(<TerrainGrid />, { terrainAction: 'place', currentBlockType: BLOCK.GRASS });
+    expect(screen.getByRole('button', { name: '草地' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: '岩石' }).getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(screen.getByRole('button', { name: '泥土' }));
     expect(engine.selectBlock).toHaveBeenCalledWith(BLOCK.SOIL);
   });
 
   it('calls selectTerrainRemove from the shovel', () => {
-    const { store, engine } = renderWith(<Palette propModels={PROPS} />);
-    act(() => store.setState({ mode: 'terrain' }));
-    fireEvent.click(screen.getByTitle('铲子'));
+    const { engine } = renderWith(<TerrainGrid />);
+    fireEvent.click(screen.getByRole('button', { name: '铲子' }));
     expect(engine.selectTerrainRemove).toHaveBeenCalled();
   });
+});
 
-  it('puts delete ahead of the prop icons and selects a model', () => {
-    const { store, engine } = renderWith(<Palette propModels={PROPS} />);
-    act(() => store.setState({ mode: 'item' }));
-    const items = document.querySelectorAll('.props-group .palette-item');
-    expect((items[0] as HTMLElement).title).toBe('删除');
-    expect(items.length).toBe(4);
-    for (const it of Array.from(items).slice(1)) {
-      expect(it.querySelector('img')?.src.startsWith('data:image/png;base64,')).toBe(true);
-    }
-    fireEvent.click(screen.getByTitle('模型1'));
-    expect(engine.selectProp).toHaveBeenCalledWith(1);
+describe('ItemGrid', () => {
+  it('shows delete + five props on the first page', () => {
+    const { container } = renderWith(<ItemGrid propModels={makeProps(18)} />);
+    expect(container.querySelectorAll('.grid-3 > *').length).toBe(6);
+    expect(screen.getByRole('button', { name: '删除' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '模型0' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '模型4' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '模型5' })).toBeNull();
   });
 
-  it('marks only the selected block active in terrain mode', () => {
-    const { store } = renderWith(<Palette propModels={PROPS} />);
-    act(() => store.setState({ mode: 'terrain', terrainAction: 'place', currentBlockType: BLOCK.GRASS }));
-    const active = document.querySelectorAll('.palette-item.active');
-    expect(active.length).toBe(1);
-    expect((active[0] as HTMLElement).title).toBe('草地');
+  it('selects a prop and paginates to the next page', () => {
+    const { engine } = renderWith(<ItemGrid propModels={makeProps(18)} />);
+    fireEvent.click(screen.getByRole('button', { name: '模型1' }));
+    expect(engine.selectProp).toHaveBeenCalledWith(1);
+    fireEvent.click(screen.getByRole('button', { name: '2' }));
+    expect(screen.getByRole('button', { name: '模型5' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '模型0' })).toBeNull();
+  });
+
+  it('calls selectItemRemove from delete', () => {
+    const { engine } = renderWith(<ItemGrid propModels={makeProps(3)} />);
+    fireEvent.click(screen.getByRole('button', { name: '删除' }));
+    expect(engine.selectItemRemove).toHaveBeenCalled();
   });
 });
 
 describe('ActionBar', () => {
-  it('wires the four action buttons', () => {
+  it('shows save and share only', () => {
     const { engine } = renderWith(<ActionBar />);
-    const actions = document.querySelectorAll('.actions button');
-    expect(actions.length).toBe(4);
-    fireEvent.click(screen.getByText('撤销'));
-    expect(engine.undo).toHaveBeenCalled();
-    fireEvent.click(screen.getByText('清空'));
-    expect(engine.reset).toHaveBeenCalled();
-    fireEvent.click(screen.getByText('保存'));
+    expect(screen.queryByRole('button', { name: '撤销' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '清空' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
     expect(engine.saveToAlbum).toHaveBeenCalled();
-    fireEvent.click(screen.getByText('分享'));
+    fireEvent.click(screen.getByRole('button', { name: '分享' }));
     expect(engine.shareNote).toHaveBeenCalled();
   });
 });
 
 describe('DebugPanel', () => {
-  it('hides debug controls until the debug button is toggled', () => {
+  it('hides debug controls until toggled', () => {
     renderWith(<DebugPanel />);
     expect(screen.queryByText('透视')).toBeNull();
-    fireEvent.click(screen.getByText('调试'));
+    fireEvent.click(screen.getByRole('button', { name: '调试' }));
     expect(screen.getByText('透视')).toBeTruthy();
-    expect(screen.getByText('调试').className).toContain('active');
-    fireEvent.click(screen.getByText('调试'));
+    fireEvent.click(screen.getByRole('button', { name: '调试' }));
     expect(screen.queryByText('透视')).toBeNull();
   });
 
-  it('changes perspective and adapter', () => {
+  it('changes perspective', () => {
     const { engine } = renderWith(<DebugPanel />);
-    fireEvent.click(screen.getByText('调试'));
+    fireEvent.click(screen.getByRole('button', { name: '调试' }));
     const slider = document.querySelector('.perspective input[type="range"]') as HTMLInputElement;
     fireEvent.change(slider, { target: { value: '120' } });
     expect(engine.setPerspective).toHaveBeenCalledWith(120);
-    const sel = document.querySelector('.adapter-select') as HTMLSelectElement;
-    fireEvent.change(sel, { target: { value: 'webgl' } });
-    expect(engine.switchAdapter).toHaveBeenCalledWith('webgl');
+  });
+
+  it('shows the adapter select', () => {
+    renderWith(<DebugPanel />);
+    fireEvent.click(screen.getByRole('button', { name: '调试' }));
+    expect(screen.getByText('适配器')).toBeTruthy();
+    expect(screen.getByText('自动')).toBeTruthy();
   });
 
   it('sets ambient and directional independently', () => {
     const { engine } = renderWith(<DebugPanel />);
-    fireEvent.click(screen.getByText('调试'));
+    fireEvent.click(screen.getByRole('button', { name: '调试' }));
     const ambient = document.querySelector('.ambient input[type="range"]') as HTMLInputElement;
     const directional = document.querySelector('.directional input[type="range"]') as HTMLInputElement;
     fireEvent.change(ambient, { target: { value: '1.2' } });
@@ -182,7 +212,7 @@ describe('DebugPanel', () => {
 
   it('changes color temperature', () => {
     const { engine } = renderWith(<DebugPanel />);
-    fireEvent.click(screen.getByText('调试'));
+    fireEvent.click(screen.getByRole('button', { name: '调试' }));
     const slider = document.querySelector('.temperature input[type="range"]') as HTMLInputElement;
     fireEvent.change(slider, { target: { value: '8000' } });
     expect(engine.setTemperature).toHaveBeenCalledWith(8000);

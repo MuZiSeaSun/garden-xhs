@@ -7,6 +7,7 @@ export type ToolAction = 'place' | 'remove' | null;
 export interface ToastState {
   readonly message: string;
   readonly key: number;
+  readonly place?: 'top' | 'bottom';
 }
 
 export interface EditorState {

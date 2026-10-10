@@ -315,7 +315,8 @@ export async function createEngine(opts: EngineOptions): Promise<Engine | null> 
       const url = renderer.captureImage();
       if (!url) { notify('截图失败'); return; }
       const ok = await saveToAlbum(url);
-      notify(ok ? '已保存到相册' : '保存失败');
+      if (ok) store.setState({ toast: { message: '已保存到相册', key: Date.now(), place: 'top' } });
+      else notify('保存失败');
     })();
   };
 

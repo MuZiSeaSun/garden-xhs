@@ -1,10 +1,21 @@
 import { build, context } from 'esbuild';
-import { copyFile, mkdir } from 'fs/promises';
+import { copyFile, mkdir, readFile, rm } from 'fs/promises';
 
 const outdir = 'dist';
+await rm(outdir, { recursive: true, force: true });
 await mkdir(outdir, { recursive: true });
 await copyFile('src/index.html', `${outdir}/index.html`);
-await copyFile('src/style.css', `${outdir}/style.css`);
+
+const stripLibraryCjkFonts = {
+  name: 'strip-library-cjk-fonts',
+  setup(build) {
+    build.onLoad({ filter: /(animal-island-ui|animal-island-vue)[\\/].*\.css$/ }, async (args) => {
+      const css = await readFile(args.path, 'utf8');
+      const contents = css.replace(/@font-face\{[^}]*font-family:\s*Noto Sans SC\b[^}]*\}/g, '');
+      return { contents, loader: 'css' };
+    });
+  },
+};
 
 const options = {
   entryPoints: ['src/app.ts'],
@@ -13,12 +24,15 @@ const options = {
   jsx: 'automatic',
   target: ['es2017'],
   outfile: `${outdir}/app.js`,
+  loader: { '.woff2': 'file', '.woff': 'file', '.svg': 'file', '.png': 'file', '.jpg': 'file', '.webp': 'file' },
+  assetNames: 'assets/[name]-[hash]',
   minify: true,
   sourcemap: false,
   legalComments: 'none',
   treeShaking: true,
   supported: { 'dynamic-import': false },
   define: { 'process.env.NODE_ENV': '"production"', __DEV__: 'false' },
+  plugins: [stripLibraryCjkFonts],
 };
 
 if (process.argv.includes('--watch')) {
