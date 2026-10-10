@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { useEditorState } from '../EngineContext';
+import { useEditorSelector } from '../EngineContext';
 
 export function Toast() {
-  const { toast } = useEditorState();
+  const toast = useEditorSelector((s) => s.toast);
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {

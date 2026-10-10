@@ -1,4 +1,4 @@
-import { useEngine, useEditorState } from '../EngineContext';
+import { useEditorSelector, useEngine } from '../EngineContext';
 import type { EditorMode } from '../../engine/editor-store';
 
 const MODES: ReadonlyArray<{ mode: EditorMode; label: string }> = [
@@ -9,7 +9,7 @@ const MODES: ReadonlyArray<{ mode: EditorMode; label: string }> = [
 
 export function ModeBar() {
   const engine = useEngine();
-  const { mode } = useEditorState();
+  const mode = useEditorSelector((s) => s.mode);
   return (
     <div className="mode-group">
       {MODES.map((m) => (

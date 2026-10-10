@@ -1,4 +1,4 @@
-import { useEngine, useEditorState } from '../EngineContext';
+import { useEditorSelector, useEngine } from '../EngineContext';
 import { BLOCK, type BlockId } from '../../core/block-types';
 import type { PropModelData } from '../../core/prop-types';
 
@@ -11,7 +11,11 @@ const PALETTE_ITEMS: ReadonlyArray<{ icon: string; name: string; type: BlockId }
 
 export function Palette({ propModels }: { propModels: readonly PropModelData[] }) {
   const engine = useEngine();
-  const { mode, terrainAction, itemAction, currentBlockType, currentPropModelId } = useEditorState();
+  const mode = useEditorSelector((s) => s.mode);
+  const terrainAction = useEditorSelector((s) => s.terrainAction);
+  const itemAction = useEditorSelector((s) => s.itemAction);
+  const currentBlockType = useEditorSelector((s) => s.currentBlockType);
+  const currentPropModelId = useEditorSelector((s) => s.currentPropModelId);
 
   if (mode === 'orbit') return null;
 

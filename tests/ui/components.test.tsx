@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, act } from '@testing-library/react';
-import type { ReactNode } from 'react';
+import { Profiler, type ReactNode } from 'react';
 import { createEditorStore } from '../../src/engine/editor-store';
 import { EngineProvider } from '../../src/ui/EngineContext';
 import { ModeBar } from '../../src/ui/components/ModeBar';
@@ -60,6 +60,22 @@ describe('ModeBar', () => {
     const { engine } = renderWith(<ModeBar />);
     fireEvent.click(screen.getByText('地形'));
     expect(engine.setMode).toHaveBeenCalledWith('terrain');
+  });
+
+  it('does not re-render when an unrelated state field changes', () => {
+    const store = createEditorStore();
+    const engine = makeEngine();
+    let renders = 0;
+    render(
+      <EngineProvider value={{ engine, store }}>
+        <Profiler id="mode" onRender={() => { renders += 1; }}>
+          <ModeBar />
+        </Profiler>
+      </EngineProvider>,
+    );
+    const afterMount = renders;
+    act(() => store.setState({ viewTheta: 1.23 }));
+    expect(renders).toBe(afterMount);
   });
 });
 

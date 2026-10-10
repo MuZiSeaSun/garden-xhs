@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useEngine, useEditorState } from '../EngineContext';
+import { useEditorSelector, useEngine } from '../EngineContext';
 import { LightDisk } from './LightDisk';
 
 const PERSPECTIVE_MIN = 60;
@@ -7,7 +7,13 @@ const PERSPECTIVE_MAX = 500;
 
 export function DebugPanel() {
   const engine = useEngine();
-  const { perspective, adapter, ambient, directional, temperature, lightDir, viewTheta } = useEditorState();
+  const perspective = useEditorSelector((s) => s.perspective);
+  const adapter = useEditorSelector((s) => s.adapter);
+  const ambient = useEditorSelector((s) => s.ambient);
+  const directional = useEditorSelector((s) => s.directional);
+  const temperature = useEditorSelector((s) => s.temperature);
+  const lightDir = useEditorSelector((s) => s.lightDir);
+  const viewTheta = useEditorSelector((s) => s.viewTheta);
   const [open, setOpen] = useState(false);
 
   return (
