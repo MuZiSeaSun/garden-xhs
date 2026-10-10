@@ -1,0 +1,17 @@
+import { useEffect, useState } from 'react';
+import { useEditorState } from '../EngineContext';
+
+export function Toast() {
+  const { toast } = useEditorState();
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    if (!toast) return;
+    setVisible(true);
+    const t = window.setTimeout(() => setVisible(false), 1500);
+    return () => window.clearTimeout(t);
+  }, [toast]);
+
+  if (!toast || !visible) return null;
+  return <div id="toast">{toast.message}</div>;
+}
