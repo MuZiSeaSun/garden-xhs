@@ -10,6 +10,7 @@ const options = {
   entryPoints: ['src/app.ts'],
   bundle: true,
   format: 'iife',
+  jsx: 'automatic',
   target: ['es2017'],
   outfile: `${outdir}/app.js`,
   minify: true,
