@@ -1,17 +1,14 @@
-function dataUrlToBase64(dataUrl: string): string {
-  const idx = dataUrl.indexOf(',');
-  return idx >= 0 ? dataUrl.slice(idx + 1) : dataUrl;
-}
-
+// 端能力分享：直接把 data: base64 传给平台 API，避免中间 await 丢失用户激活上下文。
+// 官方文档明确 saveImageToPhotosAlbum / postNote 的媒体字段接受 data: base64（含前缀）。
 export async function saveToAlbum(dataUrl: string): Promise<boolean> {
   const mt = window.xhs?.miniTool;
-  if (!mt?.writeTempFile || !mt?.saveImageToPhotosAlbum) return false;
+  if (!mt?.saveImageToPhotosAlbum) return false;
 
   try {
-    const { filePath } = await mt.writeTempFile({ data: dataUrlToBase64(dataUrl) });
-    await mt.saveImageToPhotosAlbum({ filePath });
+    await mt.saveImageToPhotosAlbum({ filePath: dataUrl });
     return true;
-  } catch {
+  } catch (err) {
+    console.error('[share] saveImageToPhotosAlbum failed', err);
     return false;
   }
 }
@@ -21,18 +18,18 @@ export async function shareAsNote(
   meta: { title: string; content: string },
 ): Promise<boolean> {
   const mt = window.xhs?.miniTool;
-  if (!mt?.writeTempFile || !mt?.postNote) return false;
+  if (!mt?.postNote) return false;
 
   try {
-    const { filePath } = await mt.writeTempFile({ data: dataUrlToBase64(dataUrl) });
     await mt.postNote({
       title: meta.title,
       content: meta.content,
       pageType: 'photo_publish',
-      mediaInfo: { image_resources: [{ url: filePath }] },
+      mediaInfo: { image_resources: [{ url: dataUrl }] },
     });
     return true;
-  } catch {
+  } catch (err) {
+    console.error('[share] postNote failed', err);
     return false;
   }
 }
